@@ -65,3 +65,8 @@ uv run ruff format {changed_files}  ||  ruff format {changed_files}
 ```
 
 Try `uv run` first (uses the project's `.venv`). If that fails, fall back to the bare command from `PATH`.
+
+## Discord input modal design
+
+- Prioritize dropdown lists and auto-completion whenever feasible, especially when input options are finite.
+- Break input flow into small ephemeral input tasks to enhance UX, filtering out unreachable options of the current input task given previous input task selections.
