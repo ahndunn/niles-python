@@ -1,0 +1,17 @@
+line-length = 80
+indent-width = 4
+fix = true
+unsafe-fixes = true
+
+[lint]
+select = ["ALL"]
+ignore = ["D203", "D213", "COM812"]
+
+[lint.isort]
+force-single-line = true
+case-sensitive = false
+
+known-first-party = ["niles"]
+
+[format]
+skip-magic-trailing-comma = true
