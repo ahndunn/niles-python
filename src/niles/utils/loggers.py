@@ -39,7 +39,7 @@ _logger.add(
     backtrace=True,
 )
 _logger.add(
-    _LOGGER_SETTINGS.DIR.joinpath("{time:YYYY_MM_DD!UTC}"),
+    _LOGGER_SETTINGS.DIR.joinpath("{time:YYYY_MM_DD!UTC}.log"),
     level=_LOGGER_SETTINGS.LEVEL,
     enqueue=True,
     colorize=True,
