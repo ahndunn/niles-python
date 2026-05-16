@@ -57,6 +57,12 @@
 - Before writing a utility function, check if `functools`, `itertools`, or stdlib already provides it.
 - Before adding a dependency, check if the language stdlib already solves the problem.
 
+## Pyright and Ruff guidelines
+
+- Ignore comments (`# type: ignore`, `# noqa`) are strongly discouraged. If an issue can be resolved statically, it MUST be resolved without suppress-comments.
+- `typing.cast()` is explicitly allowed for pyright issues when the type annotation is too narrow for a known runtime invariant.
+- After running `/pyright` or `/ruff`, resolve every flagged issue properly rather than silencing it.
+
 ## Post-coding workflow
 
 After making changes, run these three commands **only on the changed files**, in order, stopping if any fails:
