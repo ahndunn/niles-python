@@ -68,5 +68,6 @@ Try `uv run` first (uses the project's `.venv`). If that fails, fall back to the
 
 ## Discord input modal design
 
+- Avoid modals entirely. Prefer small, ephemeral messages with sequential step guides.
 - Prioritize dropdown lists and auto-completion whenever feasible, especially when input options are finite.
-- Break input flow into small ephemeral input tasks to enhance UX, filtering out unreachable options of the current input task given previous input task selections.
+- Break input flow into short ephemeral messages to enhance UX, filtering out unreachable options of the current step given previous step selections.
