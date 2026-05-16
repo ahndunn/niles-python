@@ -3,18 +3,21 @@
 from collections.abc import Awaitable
 from collections.abc import Callable
 from datetime import timedelta
+from typing import TYPE_CHECKING
 from typing import Any
 from typing import ClassVar
 
 import discord
 from discord import Interaction
-from discord.ui import Button
-from discord.ui import Select
-from discord.ui import View
 
 from niles.discord.stores import get_timezone_store
+from niles.discord.views.base import NilesView
 from niles.utils.datetime import parse_offset
 from niles.utils.loggers import LOGGER
+
+if TYPE_CHECKING:
+    from discord.ui import Button
+    from discord.ui import Select
 
 type CommandContinuation = Callable[[Interaction, timedelta], Awaitable[None]]
 
@@ -47,7 +50,7 @@ async def ensure_timezone(
     return None
 
 
-class TimezoneChangePrompt(View):
+class TimezoneChangePrompt(NilesView):
     """Step 1: Ask if user wants to change from default UTC+0."""
 
     def __init__(self, on_complete: CommandContinuation | None = None) -> None:
@@ -88,7 +91,7 @@ class TimezoneChangePrompt(View):
         self.stop()
 
 
-class TimezoneSignSelect(View):
+class TimezoneSignSelect(NilesView):
     """Step 2: Choose positive or negative offset."""
 
     def __init__(self, on_complete: CommandContinuation | None = None) -> None:
@@ -123,7 +126,7 @@ class TimezoneSignSelect(View):
         self.stop()
 
 
-class TimezoneHourSelect(View):
+class TimezoneHourSelect(NilesView):
     """Step 3: Select the hour offset."""
 
     _SPECIAL_MINUTES: ClassVar[dict[str, dict[int, tuple[int, ...]]]] = {
@@ -191,7 +194,7 @@ class TimezoneHourSelect(View):
         self.stop()
 
 
-class TimezoneMinuteSelect(View):
+class TimezoneMinuteSelect(NilesView):
     """Step 4: Select the minute offset for special hours."""
 
     def __init__(

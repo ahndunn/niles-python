@@ -17,10 +17,10 @@ import discord
 from discord import Interaction
 from discord.ui import Button
 from discord.ui import Select
-from discord.ui import View
 
 from niles.discord.models import FreeTimeEntry
 from niles.discord.models import TimeWindow
+from niles.discord.views.base import NilesView
 from niles.utils.loggers import LOGGER
 
 if TYPE_CHECKING:
@@ -86,7 +86,7 @@ def _merge_windows(windows: list[TimeWindow]) -> list[TimeWindow]:
     return merged
 
 
-class ScheduleDateRangeView(View):
+class ScheduleDateRangeView(NilesView):
     """Entry point: start date range selection flow."""
 
     def __init__(  # noqa: D107
@@ -125,7 +125,7 @@ class ScheduleDateRangeView(View):
         self.add_item(sel)
 
 
-class _ScheduleDatePickView(View):
+class _ScheduleDatePickView(NilesView):
     """Recursive step view for building a start/end date range."""
 
     def __init__(
@@ -316,7 +316,7 @@ class _ScheduleEditContext:
     configs: dict[int, tuple[str, str]]
 
 
-class ScheduleDateConfigView(View):
+class ScheduleDateConfigView(NilesView):
     """Interactive view for per-date time configuration."""
 
     def __init__(self, ctx: _ScheduleEditContext) -> None:
@@ -412,7 +412,7 @@ class ScheduleDateConfigView(View):
         await interaction.response.send_message(msg, view=view, ephemeral=True)
 
 
-class ScheduleTimeSelectView(View):
+class ScheduleTimeSelectView(NilesView):
     """Select start/end times for a specific date via hour/minute selects."""
 
     def __init__(
@@ -558,7 +558,7 @@ class ScheduleTimeSelectView(View):
         )
 
 
-class ConfirmWindowsView(View):
+class ConfirmWindowsView(NilesView):
     """Confirm/cancel generated windows."""
 
     def __init__(
@@ -609,7 +609,7 @@ class ConfirmWindowsView(View):
         await interaction.edit_original_response(content="Cancelled.")
 
 
-class RemoveSelect(View):
+class RemoveSelect(NilesView):
     """Select menu for choosing entries to remove."""
 
     def __init__(
@@ -669,7 +669,7 @@ class RemoveSelect(View):
         )
 
 
-class RemoveReasonView(View):
+class RemoveReasonView(NilesView):
     """Optional reason for removing an entry via select."""
 
     def __init__(self, store: ScheduleStore, entry_id: str) -> None:  # noqa: D107
@@ -750,7 +750,7 @@ class RemoveReasonView(View):
         )
 
 
-class ClearConfirmView(View):
+class ClearConfirmView(NilesView):
     """Confirm clearing all future entries."""
 
     def __init__(self, store: ScheduleStore, user_id: int) -> None:
@@ -782,7 +782,7 @@ class ClearConfirmView(View):
         await interaction.response.edit_message(content="Cancelled.", view=self)
 
 
-class ClearReasonView(View):
+class ClearReasonView(NilesView):
     """Optional reason for clearing via select."""
 
     def __init__(self, store: ScheduleStore, user_id: int) -> None:  # noqa: D107

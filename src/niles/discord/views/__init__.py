@@ -1,5 +1,6 @@
 """Discord UI components."""
 
+from niles.discord.views.base import NilesView as NilesView
 from niles.discord.views.events import (
     EventRemoveReasonView as EventRemoveReasonView,
 )
@@ -53,6 +54,7 @@ __all__ = [
     "JoinEventView",
     "ModConfirmationView",
     "ModInvitationView",
+    "NilesView",
     "NoReasonView",
     "RemoveReasonView",
     "RemoveSelect",

@@ -12,7 +12,6 @@ import discord
 from discord import Interaction
 from discord.ui import Button
 from discord.ui import Select
-from discord.ui import View
 
 from niles.discord.models import EventData
 from niles.discord.models import PendingConfirmation
@@ -20,6 +19,7 @@ from niles.discord.stores import EventStore
 from niles.discord.stores import PendingConfirmationStore
 from niles.discord.stores import ScheduleStore
 from niles.discord.stores import get_event_store
+from niles.discord.views.base import NilesView
 from niles.utils.loggers import LOGGER
 
 _TIMEOUT_MINUTES = 60
@@ -47,7 +47,7 @@ def _compute_timeout(sent_at: datetime | None = None) -> datetime | None:
     return next_day_8am + timedelta(minutes=remaining)
 
 
-class EventRoleSelectView(View):
+class EventRoleSelectView(NilesView):
     """Select mod/participant role for event add/remove."""
 
     def __init__(
@@ -92,7 +92,7 @@ class EventRoleSelectView(View):
         )
 
 
-class EventSelectView(View):
+class EventSelectView(NilesView):
     """Select an event from a dropdown."""
 
     def __init__(
@@ -312,7 +312,7 @@ class EventSelectView(View):
         )
 
 
-class EventRemoveReasonView(View):
+class EventRemoveReasonView(NilesView):
     """Select a reason when removing from event."""
 
     def __init__(  # noqa: D107
@@ -458,7 +458,7 @@ class EventRemoveReasonView(View):
             )
 
 
-class ModInvitationView(View):
+class ModInvitationView(NilesView):
     """Yes/no for mod invitation."""
 
     def __init__(
@@ -560,7 +560,7 @@ class ModInvitationView(View):
         await interaction.edit_original_response(content="Invitation declined.")
 
 
-class ModConfirmationView(View):
+class ModConfirmationView(NilesView):
     """Confirmation view for moderator actions."""
 
     def __init__(
@@ -912,7 +912,7 @@ class ModConfirmationView(View):
                 await m_thread.send("Event has been closed.")
 
 
-class NoReasonView(View):
+class NoReasonView(NilesView):
     """Select a reason for voting no."""
 
     def __init__(  # noqa: D107
@@ -1024,7 +1024,7 @@ class NoReasonView(View):
                 await mod_thread.send(msg)
 
 
-class JoinEventView(View):
+class JoinEventView(NilesView):
     """Yes/no for joining an event."""
 
     def __init__(self, event_id: str, target_user_id: int) -> None:

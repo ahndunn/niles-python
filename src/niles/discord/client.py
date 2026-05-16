@@ -1,8 +1,10 @@
 """Client."""
 
+from typing import TYPE_CHECKING
 from typing import final
 
 import discord
+from discord import Interaction
 from discord.ext import commands
 
 from niles.discord.commands import setup_commands
@@ -15,6 +17,9 @@ from niles.discord.stores import ScheduleStore
 from niles.discord.stores import TimezoneStore
 from niles.utils.loggers import LOGGER
 
+if TYPE_CHECKING:
+    from discord.app_commands import AppCommandError
+
 
 @final
 class NilesClient(commands.Bot):
@@ -25,11 +30,23 @@ class NilesClient(commands.Bot):
         intents = discord.Intents.default()
         intents.members = True
         super().__init__(command_prefix=(), intents=intents)
+        self.tree.on_error = self._on_app_command_error
         self.schedules: ScheduleStore = ScheduleStore()
         self.events: EventStore = EventStore()
         self.timezones: TimezoneStore = TimezoneStore()
         self.pending_confirmations: PendingConfirmationStore = (
             PendingConfirmationStore()
+        )
+
+    async def _on_app_command_error(
+        self, interaction: Interaction, error: AppCommandError
+    ) -> None:
+        """Log errors from app command interactions."""
+        LOGGER.error(
+            "App command error: interaction={}, command={}, error={}",
+            interaction.id,
+            interaction.command.name if interaction.command else None,
+            error,
         )
 
     async def on_ready(self) -> None:
