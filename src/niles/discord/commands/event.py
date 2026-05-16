@@ -4,6 +4,8 @@
 import contextlib
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 
 import discord
 from discord import Interaction
@@ -17,6 +19,7 @@ from niles.discord.stores import get_event_store
 from niles.discord.stores import get_schedule_store
 from niles.discord.views import ModConfirmationView
 from niles.discord.views import ModInvitationView
+from niles.discord.views import ensure_timezone
 from niles.utils.loggers import LOGGER
 
 event_group = app_commands.Group(name="event", description="Manage events")
@@ -25,20 +28,12 @@ event_group = app_commands.Group(name="event", description="Manage events")
 class CreateEventModal(Modal):
     """Modal for creating an event."""
 
-    def __init__(self) -> None:
+    def __init__(self, offset: timedelta) -> None:
         """Init."""
         super().__init__(title="Create Event")
+        self._offset = offset
         self._name: TextInput = TextInput(
             label="Event Name", placeholder="Enter event name", required=True
-        )
-        self._date: TextInput = TextInput(
-            label="Date", placeholder="YYYY-MM-DD", required=True
-        )
-        self._start_time: TextInput = TextInput(
-            label="Start Time", placeholder="HH:MM (24h)", required=True
-        )
-        self._end_time: TextInput = TextInput(
-            label="End Time", placeholder="HH:MM (24h)", required=True
         )
         self._date: TextInput = TextInput(
             label="Date", placeholder="YYYY-MM-DD", required=True
@@ -57,11 +52,9 @@ class CreateEventModal(Modal):
     async def on_submit(self, interaction: Interaction) -> None:  # noqa: C901
         """Handle event creation submission."""
         try:
-            sdate = datetime.strptime(self._date.value, "%Y-%m-%d").replace(
-                tzinfo=UTC
-            )
-            stime = datetime.strptime(self._start_time.value, "%H:%M").time()  # noqa: DTZ007
-            etime = datetime.strptime(self._end_time.value, "%H:%M").time()  # noqa: DTZ007
+            sy, sm, sd = (int(x) for x in self._date.value.split("-"))
+            sh, smi = (int(x) for x in self._start_time.value.split(":"))
+            eh, emi = (int(x) for x in self._end_time.value.split(":"))
         except ValueError as e:
             LOGGER.warning(
                 "Invalid date/time in CreateEventModal from user {}: {}",
@@ -73,10 +66,11 @@ class CreateEventModal(Modal):
             )
             return
 
-        window = TimeWindow(
-            start=sdate.replace(hour=stime.hour, minute=stime.minute),
-            end=sdate.replace(hour=etime.hour, minute=etime.minute),
-        )
+        user_tz = timezone(self._offset)
+        start = datetime(sy, sm, sd, sh, smi, tzinfo=user_tz).astimezone(UTC)
+        end = datetime(sy, sm, sd, eh, emi, tzinfo=user_tz).astimezone(UTC)
+
+        window = TimeWindow(start=start, end=end)
         if window.end <= window.start:
             LOGGER.warning(
                 "End time before start time in CreateEventModal from user {}",
@@ -208,8 +202,11 @@ class CreateEventModal(Modal):
 )
 async def event_create(interaction: Interaction) -> None:
     """Create a new event."""
+    offset = await ensure_timezone(interaction)
+    if offset is None:
+        return
     LOGGER.info("User {} used /event create", interaction.user.id)
-    modal = CreateEventModal()
+    modal = CreateEventModal(offset)
     await interaction.response.send_modal(modal)
 
 

@@ -11,6 +11,7 @@ from niles.discord.hooks.on_message import on_message as _on_message
 from niles.discord.hooks.on_ready import on_ready as _on_ready
 from niles.discord.stores import EventStore
 from niles.discord.stores import ScheduleStore
+from niles.discord.stores import TimezoneStore
 from niles.utils.loggers import LOGGER
 
 
@@ -25,6 +26,7 @@ class NilesClient(commands.Bot):
         super().__init__(command_prefix=(), intents=intents)
         self.schedules: ScheduleStore = ScheduleStore()
         self.events: EventStore = EventStore()
+        self.timezones: TimezoneStore = TimezoneStore()
 
     async def on_ready(self) -> None:
         """On ready."""

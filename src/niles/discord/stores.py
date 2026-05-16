@@ -185,6 +185,38 @@ def get_schedule_store(
     return None
 
 
+@final
+class TimezoneStore:
+    """In-memory store: user_id → offset string (e.g. ``'UTC+5'``)."""
+
+    def __init__(self) -> None:
+        """Init."""
+        self._timezones: dict[int, str] = {}
+
+    def get(self, user_id: int) -> str | None:
+        """Get a user's offset string, or ``None`` if not set."""
+        return self._timezones.get(user_id)
+
+    def set(self, user_id: int, offset_str: str) -> None:
+        """Set a user's offset string."""
+        self._timezones[user_id] = offset_str
+
+    def has(self, user_id: int) -> bool:
+        """Check if a user has a timezone set."""
+        return user_id in self._timezones
+
+
+def get_timezone_store(
+    interaction: discord.Interaction,
+) -> TimezoneStore | None:
+    """Get the TimezoneStore from the client."""
+    client = interaction.client
+    store = getattr(client, "timezones", None)
+    if isinstance(store, TimezoneStore):
+        return store
+    return None
+
+
 def get_event_store(interaction: discord.Interaction) -> EventStore | None:
     """Get the EventStore from the client."""
     client = interaction.client

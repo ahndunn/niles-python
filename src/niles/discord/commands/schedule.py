@@ -2,15 +2,19 @@
 
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 
 from discord import Interaction
 from discord import app_commands
 
 from niles.discord.models import FreeTimeEntry  # noqa: TC001
 from niles.discord.stores import get_schedule_store
+from niles.discord.stores import get_timezone_store
 from niles.discord.views import ClearConfirmView
 from niles.discord.views import RemoveSelect
 from niles.discord.views import ScheduleAddModal
+from niles.discord.views import ensure_timezone
+from niles.utils.datetime import parse_offset
 from niles.utils.loggers import LOGGER
 
 _MAX_MSG_LEN = 1900
@@ -23,6 +27,9 @@ schedule_group = app_commands.Group(
 @schedule_group.command(name="add", description="Add new free time windows")
 async def schedule_add(interaction: Interaction) -> None:
     """Add new free time windows."""
+    offset = await ensure_timezone(interaction)
+    if offset is None:
+        return
     LOGGER.info("User {} used /schedule add", interaction.user.id)
     store = get_schedule_store(interaction)
     if store is None:
@@ -34,13 +41,21 @@ async def schedule_add(interaction: Interaction) -> None:
             "Store not available.", ephemeral=True
         )
         return
-    modal = ScheduleAddModal(store, interaction.user.id)
+    modal = ScheduleAddModal(store, interaction.user.id, offset)
     await interaction.response.send_modal(modal)
 
 
 @schedule_group.command(name="remove", description="Remove a free time window")
 async def schedule_remove(interaction: Interaction) -> None:
     """Remove a declared free time window."""
+    store_tz = get_timezone_store(interaction)
+    offset = timedelta(0)
+    if store_tz is not None:
+        offset_str = store_tz.get(interaction.user.id)
+        if offset_str is not None:
+            parsed = parse_offset(offset_str)
+            if parsed is not None:
+                offset = parsed
     LOGGER.info("User {} used /schedule remove", interaction.user.id)
     store = get_schedule_store(interaction)
     if store is None:
@@ -67,7 +82,7 @@ async def schedule_remove(interaction: Interaction) -> None:
             "No future free time entries to remove.", ephemeral=True
         )
         return
-    view = RemoveSelect(store, interaction.user.id, future_entries)
+    view = RemoveSelect(store, interaction.user.id, future_entries, offset)
     await interaction.response.send_message(
         "Select an entry to remove:", view=view, ephemeral=True
     )
