@@ -8,6 +8,8 @@ from datetime import datetime
 from typing import Literal
 from uuid import uuid4
 
+from niles.utils.loggers import LOGGER
+
 
 @dataclass(frozen=True, slots=True)
 class TimeWindow:
@@ -102,6 +104,13 @@ def register_pending(  # noqa: PLR0913
         votes=dict.fromkeys(moderator_ids, "pending"),
         timeout_at=timeout_at,
     )
+    LOGGER.debug(
+        "Pending {} for event {} registered (target={}, moderators={})",
+        action,
+        event_id,
+        target_user_id,
+        moderator_ids,
+    )
 
 
 def get_pending(
@@ -116,3 +125,4 @@ def remove_pending(
 ) -> None:
     """Remove a pending confirmation."""
     _PendingConfirmationRegistry.pop(_pending_key(event_id, action), None)
+    LOGGER.debug("Pending {} for event {} removed", action, event_id)

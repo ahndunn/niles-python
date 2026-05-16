@@ -2,10 +2,12 @@
 
 from typing import TYPE_CHECKING
 
+from niles.utils.loggers import LOGGER
+
 if TYPE_CHECKING:
     import discord
 
 
-async def on_disconnect(client: discord.Client) -> None:
+async def on_disconnect(_client: discord.Client) -> None:
     """On disconnect."""
-    raise NotImplementedError
+    LOGGER.warning("Niles disconnected from Discord gateway")

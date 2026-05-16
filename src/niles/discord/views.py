@@ -29,6 +29,7 @@ from niles.discord.models import remove_pending
 from niles.discord.stores import EventStore
 from niles.discord.stores import ScheduleStore
 from niles.discord.stores import get_event_store
+from niles.utils.loggers import LOGGER
 
 _DAY_NAMES: dict[str, int] = {
     "mon": 0,
@@ -169,11 +170,20 @@ class ScheduleAddModal(Modal):
                 self._days.value,
             )
         except ValueError as e:
+            LOGGER.warning(
+                "Invalid input in ScheduleAddModal for user {}: {}",
+                interaction.user.id,
+                e,
+            )
             await interaction.response.send_message(
                 f"Invalid input: {e}", ephemeral=True
             )
             return
         if not windows:
+            LOGGER.warning(
+                "No windows generated in ScheduleAddModal for user {}",
+                interaction.user.id,
+            )
             await interaction.response.send_message(
                 "No windows generated. Check your date/time range.",
                 ephemeral=True,
@@ -183,6 +193,11 @@ class ScheduleAddModal(Modal):
         preview = "\n".join(_fmt_range(w) for w in preview_items)
         if len(windows) > _PREVIEW_LIMIT:
             preview += f"\n... and {len(windows) - _PREVIEW_LIMIT} more"
+        LOGGER.debug(
+            "ScheduleAddModal: user {} generated {} windows",
+            interaction.user.id,
+            len(windows),
+        )
         view = ConfirmWindowsView(self._store, self._user_id, windows)
         msg = (
             f"Generated {len(windows)} time windows:\n"
@@ -218,6 +233,11 @@ class ConfirmWindowsView(View):
     ) -> None:
         """Confirm adding windows."""
         self._store.add_entry(self._user_id, self._windows)
+        LOGGER.info(
+            "User {} confirmed and added {} free time windows",
+            interaction.user.id,
+            len(self._windows),
+        )
         await self._disable_all(interaction)
         await interaction.edit_original_response(
             content=f"Added {len(self._windows)} free time windows!"
@@ -228,6 +248,11 @@ class ConfirmWindowsView(View):
         self, interaction: Interaction, _button: Button[Any]
     ) -> None:
         """Cancel adding windows."""
+        LOGGER.info(
+            "User {} cancelled adding {} free time windows",
+            interaction.user.id,
+            len(self._windows),
+        )
         await self._disable_all(interaction)
         await interaction.edit_original_response(content="Cancelled.")
 
@@ -270,6 +295,11 @@ class RemoveSelect(View):
             return
         if not item.values or item.values[0] == "none":
             return
+        LOGGER.debug(
+            "User {} selected entry {} for removal",
+            interaction.user.id,
+            item.values[0],
+        )
         modal = RemoveReasonModal(self._store, item.values[0])
         await interaction.response.send_modal(modal)
 
@@ -295,10 +325,21 @@ class RemoveReasonModal(Modal):
         reason = self._reason.value or None
         entry = self._store.remove_entry(self._entry_id, reason)
         if entry is None:
+            LOGGER.warning(
+                "Remove failed: entry {} not found for user {}",
+                self._entry_id,
+                interaction.user.id,
+            )
             await interaction.response.send_message(
                 "Entry not found.", ephemeral=True
             )
             return
+        LOGGER.info(
+            "User {} removed entry {} (reason={})",
+            interaction.user.id,
+            self._entry_id,
+            reason,
+        )
         await interaction.response.send_message(
             "Removed free time window.", ephemeral=True
         )
@@ -318,6 +359,7 @@ class ClearConfirmView(View):
         self, interaction: Interaction, _button: Button[Any]
     ) -> None:
         """Open reason modal for clearing."""
+        LOGGER.info("User {} initiated clear all entries", interaction.user.id)
         modal = ClearReasonModal(self._store, self._user_id)
         await interaction.response.send_modal(modal)
 
@@ -326,6 +368,7 @@ class ClearConfirmView(View):
         self, interaction: Interaction, _button: Button[Any]
     ) -> None:
         """Cancel clearing."""
+        LOGGER.info("User {} cancelled clearing entries", interaction.user.id)
         for child in self.children:
             child.disabled = True  # type: ignore[reportAttributeAccessIssue]
         await interaction.response.edit_message(content="Cancelled.", view=self)
@@ -352,6 +395,12 @@ class ClearReasonModal(Modal):
         reason = self._reason.value or None
         now = datetime.now(UTC)
         removed = self._store.clear_user_entries(self._user_id, now, reason)
+        LOGGER.info(
+            "User {} cleared {} entries (reason={})",
+            interaction.user.id,
+            len(removed),
+            reason,
+        )
         await interaction.response.send_message(
             f"Cleared {len(removed)} future entries.", ephemeral=True
         )
@@ -381,6 +430,13 @@ class ModInvitationView(View):
     ) -> None:
         """Accept the moderator invitation."""
         if interaction.user.id != self._target_user_id:
+            LOGGER.warning(
+                "User {} attempted to accept mod invitation "
+                "for event {} meant for {}",
+                interaction.user.id,
+                self._event_id,
+                self._target_user_id,
+            )
             await interaction.response.send_message(
                 "Not your invitation.", ephemeral=True
             )
@@ -390,6 +446,9 @@ class ModInvitationView(View):
             return
         event = store.get_event(self._event_id)
         if event is None:
+            LOGGER.warning(
+                "Event {} not found in ModInvitationView accept", self._event_id
+            )
             await interaction.response.send_message(
                 "Event not found.", ephemeral=True
             )
@@ -409,6 +468,11 @@ class ModInvitationView(View):
             created_at=event.created_at,
         )
         store.update_event(updated)
+        LOGGER.info(
+            "User {} accepted mod invitation for event {}",
+            self._target_user_id,
+            self._event_id,
+        )
         await self._disable_all(interaction)
         await interaction.edit_original_response(
             content="You are now a moderator!"
@@ -424,10 +488,22 @@ class ModInvitationView(View):
     ) -> None:
         """Decline the moderator invitation."""
         if interaction.user.id != self._target_user_id:
+            LOGGER.warning(
+                "User {} attempted to decline mod invitation "
+                "for event {} meant for {}",
+                interaction.user.id,
+                self._event_id,
+                self._target_user_id,
+            )
             await interaction.response.send_message(
                 "Not your invitation.", ephemeral=True
             )
             return
+        LOGGER.info(
+            "User {} declined mod invitation for event {}",
+            self._target_user_id,
+            self._event_id,
+        )
         await self._disable_all(interaction)
         await interaction.edit_original_response(content="Invitation declined.")
 
@@ -475,16 +551,33 @@ class ModConfirmationView(View):
         mod_id = interaction.user.id
         pending = get_pending(self._event_id, self._action)
         if pending is None:
+            LOGGER.warning(
+                "User {} tried to vote yes on inactive {} for event {}",
+                mod_id,
+                self._action,
+                self._event_id,
+            )
             await interaction.response.send_message(
                 "This confirmation is no longer active.", ephemeral=True
             )
             return
         if mod_id not in pending.votes:
+            LOGGER.warning(
+                "User {} is not a moderator for event {}, tried yes vote",
+                mod_id,
+                self._event_id,
+            )
             await interaction.response.send_message(
                 "You are not a moderator for this event.", ephemeral=True
             )
             return
         pending.votes[mod_id] = "yes"
+        LOGGER.info(
+            "User {} voted yes on {} for event {}",
+            mod_id,
+            self._action,
+            self._event_id,
+        )
         await interaction.response.send_message("Voted yes.", ephemeral=True)
         await self._check_complete(interaction, pending)
 
@@ -494,6 +587,11 @@ class ModConfirmationView(View):
     ) -> None:
         """Vote no on the action."""
         if self._action == "close":
+            LOGGER.warning(
+                "User {} tried to vote no on close for event {}",
+                interaction.user.id,
+                self._event_id,
+            )
             await interaction.response.send_message(
                 "Close requires all moderators to vote yes. "
                 "Use Cancel instead.",
@@ -503,11 +601,22 @@ class ModConfirmationView(View):
         mod_id = interaction.user.id
         pending = get_pending(self._event_id, self._action)
         if pending is None:
+            LOGGER.warning(
+                "User {} tried to vote no on inactive {} for event {}",
+                mod_id,
+                self._action,
+                self._event_id,
+            )
             await interaction.response.send_message(
                 "This confirmation is no longer active.", ephemeral=True
             )
             return
         if mod_id not in pending.votes:
+            LOGGER.warning(
+                "User {} is not a moderator for event {}, tried no vote",
+                mod_id,
+                self._event_id,
+            )
             await interaction.response.send_message(
                 "You are not a moderator for this event.", ephemeral=True
             )
@@ -522,16 +631,33 @@ class ModConfirmationView(View):
         """Cancel the action entirely."""
         pending = get_pending(self._event_id, self._action)
         if pending is None:
+            LOGGER.debug(
+                "Cancel pressed but no pending {} for event {}",
+                self._action,
+                self._event_id,
+            )
             return
         mod_id = interaction.user.id
         store = get_event_store(interaction)
         ev = store and store.get_event(self._event_id)
         if ev is None or mod_id not in ev.moderator_ids:
+            LOGGER.warning(
+                "Non-moderator {} tried to cancel {} for event {}",
+                mod_id,
+                self._action,
+                self._event_id,
+            )
             await interaction.response.send_message(
                 "Only moderators can cancel.", ephemeral=True
             )
             return
         remove_pending(self._event_id, self._action)
+        LOGGER.info(
+            "User {} cancelled {} for event {}",
+            mod_id,
+            self._action,
+            self._event_id,
+        )
         await self._disable_all(interaction)
         await interaction.edit_original_response(content="Action cancelled.")
 
@@ -570,6 +696,12 @@ class ModConfirmationView(View):
         pending: _PendingConfirmation,
     ) -> None:
         """Handle a rejected action."""
+        LOGGER.warning(
+            "{} for event {} was rejected (votes={})",
+            pending.action,
+            event.id,
+            dict(pending.votes),
+        )
         votes_str = await self._format_votes(pending)
         msg = (
             f"Action **{pending.action}** on event **{event.name}** "
@@ -589,6 +721,7 @@ class ModConfirmationView(View):
         pending: _PendingConfirmation,
     ) -> None:
         """Handle an approved action."""
+        LOGGER.info("{} for event {} was approved", pending.action, event.id)
         target = pending.target_user_id
         if pending.action == "add_user" and target is not None:
             await self._approve_add_user(
@@ -749,12 +882,24 @@ class NoReasonModal(Modal):
         """Handle modal submission."""
         pending = get_pending(self._event_id, self._action)
         if pending is None:
+            LOGGER.warning(
+                "NoReasonModal: no pending {} for event {}",
+                self._action,
+                self._event_id,
+            )
             await interaction.response.send_message(
                 "Confirmation no longer active.", ephemeral=True
             )
             return
         pending.votes[self._mod_id] = "no"
         pending.reason = self._reason.value
+        LOGGER.info(
+            "User {} voted no on {} for event {} (reason={})",
+            self._mod_id,
+            self._action,
+            self._event_id,
+            self._reason.value,
+        )
         await interaction.response.send_message("Voted no.", ephemeral=True)
         remove_pending(self._event_id, self._action)
         store = get_event_store(interaction)
@@ -797,10 +942,21 @@ class JoinEventView(View):
     ) -> None:
         """Accept the invitation to join."""
         if interaction.user.id != self._target_user_id:
+            LOGGER.warning(
+                "User {} attempted to join event {} as {}",
+                interaction.user.id,
+                self._event_id,
+                self._target_user_id,
+            )
             await interaction.response.send_message(
                 "Not your invitation.", ephemeral=True
             )
             return
+        LOGGER.info(
+            "User {} accepted invitation to join event {}",
+            self._target_user_id,
+            self._event_id,
+        )
         modal = JoinReasonModal(self._event_id, self._target_user_id)
         await interaction.response.send_modal(modal)
 
@@ -810,10 +966,21 @@ class JoinEventView(View):
     ) -> None:
         """Decline the invitation."""
         if interaction.user.id != self._target_user_id:
+            LOGGER.warning(
+                "User {} attempted to decline invitation for event {} as {}",
+                interaction.user.id,
+                self._event_id,
+                self._target_user_id,
+            )
             await interaction.response.send_message(
                 "Not your invitation.", ephemeral=True
             )
             return
+        LOGGER.info(
+            "User {} declined invitation to event {}",
+            self._target_user_id,
+            self._event_id,
+        )
         await self._disable_all(interaction)
         await interaction.edit_original_response(content="Invitation declined.")
         store = get_event_store(interaction)
@@ -848,9 +1015,16 @@ class JoinReasonModal(Modal):
         """Handle modal submission."""
         store = get_event_store(interaction)
         if store is None:
+            LOGGER.error(
+                "EventStore unavailable in JoinReasonModal for event {}",
+                self._event_id,
+            )
             return
         event = store.get_event(self._event_id)
         if event is None:
+            LOGGER.warning(
+                "Event {} not found in JoinReasonModal", self._event_id
+            )
             await interaction.response.send_message(
                 "Event not found.", ephemeral=True
             )
@@ -872,6 +1046,12 @@ class JoinReasonModal(Modal):
         store.update_event(updated)
         reason_text = (
             f"\nReason: {self._reason.value}" if self._reason.value else ""
+        )
+        LOGGER.info(
+            "User {} joined event {} (reason={})",
+            self._target_user_id,
+            self._event_id,
+            self._reason.value or None,
         )
         await interaction.response.edit_message(
             content=f"You've joined the event!{reason_text}", view=None

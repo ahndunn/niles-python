@@ -30,13 +30,22 @@ class NilesClient(commands.Bot):
         """On ready."""
         setup_commands(self.tree)
         await self.tree.sync()
-        LOGGER.info("Niles is ready!")
+        LOGGER.info(
+            "Niles is ready! (user={}, guilds={})", self.user, len(self.guilds)
+        )
         await _on_ready(self)
 
     async def on_message(self, message: discord.Message) -> None:
         """On message."""
+        LOGGER.debug(
+            "Message from {} in {}: {}",
+            message.author,
+            message.channel,
+            message.content[:80] if message.content else "(no content)",
+        )
         await _on_message(self, message)
 
     async def on_disconnect(self) -> None:
         """On disconnect."""
+        LOGGER.warning("Niles disconnected from Discord gateway")
         await _on_disconnect(self)

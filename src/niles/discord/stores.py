@@ -8,6 +8,7 @@ from typing import final
 from niles.discord.models import EventData
 from niles.discord.models import FreeTimeEntry
 from niles.discord.models import TimeWindow
+from niles.utils.loggers import LOGGER
 
 if TYPE_CHECKING:
     import discord
@@ -31,6 +32,12 @@ class ScheduleStore:
         )
         self._entries[entry.id] = entry
         self._user_entries.setdefault(user_id, []).append(entry.id)
+        LOGGER.debug(
+            "Added free time entry {} for user {} ({} windows)",
+            entry.id,
+            user_id,
+            len(windows),
+        )
         return entry
 
     def get_user_entries(
@@ -53,6 +60,7 @@ class ScheduleStore:
         """Mark an entry as removed."""
         entry = self._entries.get(entry_id)
         if entry is None:
+            LOGGER.warning("Remove failed: entry {} not found", entry_id)
             return None
         new_entry = FreeTimeEntry(
             id=entry.id,
@@ -63,6 +71,12 @@ class ScheduleStore:
             removed_reason=reason,
         )
         self._entries[entry_id] = new_entry
+        LOGGER.debug(
+            "Removed entry {} for user {} (reason={})",
+            entry_id,
+            entry.user_id,
+            reason,
+        )
         return new_entry
 
     def clear_user_entries(
@@ -85,6 +99,12 @@ class ScheduleStore:
             removed_entry = self.remove_entry(eid, reason)
             if removed_entry is not None:
                 removed.append(removed_entry)
+        LOGGER.debug(
+            "Cleared {} entries for user {} (reason={})",
+            len(removed),
+            user_id,
+            reason,
+        )
         return removed
 
     def get_all_entries(self) -> list[FreeTimeEntry]:
@@ -127,18 +147,26 @@ class EventStore:
     def create_event(self, event: EventData) -> EventData:
         """Create a new event."""
         self._events[event.id] = event
+        LOGGER.info(
+            "Event created: {} (id={}, creator={})",
+            event.name,
+            event.id,
+            event.creator_id,
+        )
         return event
 
     def get_event(self, event_id: str) -> EventData | None:
         """Get an event by ID."""
         event = self._events.get(event_id)
         if event is None:
+            LOGGER.debug("Event {} not found in store", event_id)
             return None
         return event
 
     def update_event(self, event: EventData) -> EventData:
         """Update an event (replace by ID)."""
         self._events[event.id] = event
+        LOGGER.debug("Event {} updated (closed={})", event.id, event.is_closed)
         return event
 
     def get_all_events(self) -> list[EventData]:

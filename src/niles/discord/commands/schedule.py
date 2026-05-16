@@ -11,6 +11,7 @@ from niles.discord.stores import get_schedule_store
 from niles.discord.views import ClearConfirmView
 from niles.discord.views import RemoveSelect
 from niles.discord.views import ScheduleAddModal
+from niles.utils.loggers import LOGGER
 
 _MAX_MSG_LEN = 1900
 
@@ -22,8 +23,13 @@ schedule_group = app_commands.Group(
 @schedule_group.command(name="add", description="Add new free time windows")
 async def schedule_add(interaction: Interaction) -> None:
     """Add new free time windows."""
+    LOGGER.info("User {} used /schedule add", interaction.user.id)
     store = get_schedule_store(interaction)
     if store is None:
+        LOGGER.warning(
+            "ScheduleStore unavailable for user {} in /schedule add",
+            interaction.user.id,
+        )
         await interaction.response.send_message(
             "Store not available.", ephemeral=True
         )
@@ -35,8 +41,13 @@ async def schedule_add(interaction: Interaction) -> None:
 @schedule_group.command(name="remove", description="Remove a free time window")
 async def schedule_remove(interaction: Interaction) -> None:
     """Remove a declared free time window."""
+    LOGGER.info("User {} used /schedule remove", interaction.user.id)
     store = get_schedule_store(interaction)
     if store is None:
+        LOGGER.warning(
+            "ScheduleStore unavailable for user {} in /schedule remove",
+            interaction.user.id,
+        )
         await interaction.response.send_message(
             "Store not available.", ephemeral=True
         )
@@ -46,6 +57,11 @@ async def schedule_remove(interaction: Interaction) -> None:
     future_entries = [
         e for e in entries if any(w.start >= now for w in e.windows)
     ]
+    LOGGER.debug(
+        "User {} has {} future entries to choose from",
+        interaction.user.id,
+        len(future_entries),
+    )
     if not future_entries:
         await interaction.response.send_message(
             "No future free time entries to remove.", ephemeral=True
@@ -62,8 +78,13 @@ async def schedule_remove(interaction: Interaction) -> None:
 )
 async def schedule_clear(interaction: Interaction) -> None:
     """Clear all future free time windows."""
+    LOGGER.info("User {} used /schedule clear", interaction.user.id)
     store = get_schedule_store(interaction)
     if store is None:
+        LOGGER.warning(
+            "ScheduleStore unavailable for user {} in /schedule clear",
+            interaction.user.id,
+        )
         await interaction.response.send_message(
             "Store not available.", ephemeral=True
         )
@@ -73,6 +94,11 @@ async def schedule_clear(interaction: Interaction) -> None:
     future_entries = [
         e for e in entries if any(w.start >= now for w in e.windows)
     ]
+    LOGGER.debug(
+        "User {} has {} future entries to clear",
+        interaction.user.id,
+        len(future_entries),
+    )
     if not future_entries:
         await interaction.response.send_message(
             "No future entries to clear.", ephemeral=True
@@ -122,8 +148,13 @@ def _build_heatmap(
 )
 async def schedule_view(interaction: Interaction) -> None:
     """Display a heatmap of everyone's free times."""
+    LOGGER.info("User {} used /schedule view", interaction.user.id)
     store = get_schedule_store(interaction)
     if store is None:
+        LOGGER.warning(
+            "ScheduleStore unavailable for user {} in /schedule view",
+            interaction.user.id,
+        )
         await interaction.response.send_message(
             "Store not available.", ephemeral=True
         )
@@ -137,6 +168,12 @@ async def schedule_view(interaction: Interaction) -> None:
 
     removed = store.get_removed_entries()
     msg = _build_heatmap(all_entries, removed)
+    LOGGER.debug(
+        "Heatmap built: {} entries, {} removed entries, {} chars",
+        len(all_entries),
+        len(removed),
+        len(msg),
+    )
 
     if len(msg) > _MAX_MSG_LEN:
         msg = msg[:_MAX_MSG_LEN] + "\n..."
