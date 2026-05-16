@@ -30,6 +30,9 @@ if TYPE_CHECKING:
 def _first_val(interaction: Interaction) -> str | None:
     """Extract the first selected value from a Select interaction."""
     data = cast("dict[str, Any]", interaction.data)
+    vals = data.get("values")
+    if vals:
+        return vals[0]
     for child in data.get("components", []):
         comps = cast("list[dict[str, Any]]", child.get("components", []))
         for comp in comps:

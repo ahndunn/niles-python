@@ -18,10 +18,18 @@ class NilesView(View):
     async def on_error(
         self, interaction: Interaction, error: Exception, item: Item[Any], /
     ) -> None:
-        """Log view interaction errors."""
+        """Log view interaction errors and notify the user."""
         LOGGER.error(
             "View interaction failed: interaction={}, item={}, error={}",
             interaction.id,
             item.__class__.__name__,
             error,
         )
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "Something went wrong. Please try again.", ephemeral=True
+            )
+        else:
+            await interaction.followup.send(
+                "Something went wrong. Please try again.", ephemeral=True
+            )
