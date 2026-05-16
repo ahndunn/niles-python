@@ -3,11 +3,11 @@
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
 from discord import Interaction
 from discord import app_commands
 
-from niles.discord.models import FreeTimeEntry  # noqa: TC001
 from niles.discord.stores import get_schedule_store
 from niles.discord.stores import get_timezone_store
 from niles.discord.views import ClearConfirmView
@@ -16,6 +16,9 @@ from niles.discord.views import ScheduleDateRangeModal
 from niles.discord.views import ensure_timezone
 from niles.utils.datetime import parse_offset
 from niles.utils.loggers import LOGGER
+
+if TYPE_CHECKING:
+    from niles.discord.models import FreeTimeEntry
 
 _MAX_MSG_LEN = 1900
 

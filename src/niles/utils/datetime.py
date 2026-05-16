@@ -80,7 +80,7 @@ def format_offset(offset: timedelta) -> str:
 
 
 def locale_to_offset_str(locale_value: str) -> str | None:
-    """Guess UTC offset string from a Discord locale value (e.g. ``'en-US'``)."""  # noqa: E501
+    """Guess UTC offset from a Discord locale value (e.g. ``'en-US'``)."""
     return _LOCALE_TO_OFFSET.get(locale_value)
 
 

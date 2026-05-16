@@ -73,7 +73,7 @@ class CreateEventModal(Modal):
         self.add_item(self._start_time)
         self.add_item(self._end_time)
 
-    async def on_submit(self, interaction: Interaction) -> None:  # noqa: C901
+    async def on_submit(self, interaction: Interaction) -> None:
         """Handle event creation submission."""
         try:
             sy = int(self._year.value)
@@ -121,6 +121,36 @@ class CreateEventModal(Modal):
             moderator_ids=(interaction.user.id,),
         )
 
+        result = await self._finalize_event(event, interaction)
+        if result is None:
+            return
+
+        part_thread, mod_thread = result
+
+        LOGGER.info(
+            "Event '{}' (id={}) created by user {} "
+            "with {} participants, {} mods, {} free users auto-added",
+            event.name,
+            event.id,
+            interaction.user.id,
+            len(event.participant_ids),
+            len(event.moderator_ids),
+            len(free_user_ids),
+        )
+
+        free_names = " ".join(f"<@{uid}>" for uid in free_user_ids)
+        await interaction.response.send_message(
+            f"Created event **{event.name}**!\n"
+            f"Free users in this window: {free_names}\n"
+            f"Mod thread: {mod_thread.mention}\n"
+            f"Event thread: {part_thread.mention}",
+            ephemeral=True,
+        )
+
+    async def _finalize_event(
+        self, event: EventData, interaction: Interaction
+    ) -> tuple[discord.Thread, discord.Thread] | None:
+        """Create threads, store event, add members."""
         store = get_event_store(interaction)
         if store is None:
             LOGGER.error(
@@ -130,7 +160,7 @@ class CreateEventModal(Modal):
             await interaction.response.send_message(
                 "Store not available.", ephemeral=True
             )
-            return
+            return None
 
         if interaction.guild is None:
             LOGGER.warning(
@@ -140,7 +170,7 @@ class CreateEventModal(Modal):
             await interaction.response.send_message(
                 "Must be used in a guild.", ephemeral=True
             )
-            return
+            return None
 
         guild = interaction.guild
 
@@ -162,7 +192,7 @@ class CreateEventModal(Modal):
                 "No suitable channel found for creating threads.",
                 ephemeral=True,
             )
-            return
+            return None
 
         part_thread = await parent.create_thread(
             name=f"event-{event.name[:80]}",
@@ -202,25 +232,7 @@ class CreateEventModal(Modal):
                 ):
                     await mod_thread.add_user(member)
 
-        LOGGER.info(
-            "Event '{}' (id={}) created by user {} "
-            "with {} participants, {} mods, {} free users auto-added",
-            event.name,
-            event.id,
-            interaction.user.id,
-            len(event.participant_ids),
-            len(event.moderator_ids),
-            len(free_user_ids),
-        )
-
-        free_names = " ".join(f"<@{uid}>" for uid in free_user_ids)
-        await interaction.response.send_message(
-            f"Created event **{event.name}**!\n"
-            f"Free users in this window: {free_names}\n"
-            f"Mod thread: {mod_thread.mention}\n"
-            f"Event thread: {part_thread.mention}",
-            ephemeral=True,
-        )
+        return part_thread, mod_thread
 
 
 @event_group.command(

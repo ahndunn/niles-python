@@ -1,6 +1,7 @@
 line-length = 80
 indent-width = 4
 fix = true
+unsafe-fixes = true
 
 [lint]
 select = ["ALL"]

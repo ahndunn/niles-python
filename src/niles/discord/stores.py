@@ -3,10 +3,12 @@
 from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
+from typing import Literal
 from typing import final
 
 from niles.discord.models import EventData
 from niles.discord.models import FreeTimeEntry
+from niles.discord.models import PendingConfirmation
 from niles.discord.models import TimeWindow
 from niles.utils.loggers import LOGGER
 
@@ -206,6 +208,55 @@ class TimezoneStore:
         return user_id in self._timezones
 
 
+@final
+class PendingConfirmationStore:
+    """In-memory store for pending confirmations."""
+
+    def __init__(self) -> None:
+        """Init."""
+        self._entries: dict[str, PendingConfirmation] = {}
+
+    def register(  # noqa: PLR0913 — needs all fields to build PendingConfirmation
+        self,
+        event_id: str,
+        action: Literal["add_user", "remove_user", "close"],
+        reason: str | None,
+        target_user_id: int | None,
+        moderator_ids: list[int],
+        timeout_at: datetime | None,
+    ) -> None:
+        """Register a pending confirmation."""
+        key = f"{event_id}:{action}"
+        self._entries[key] = PendingConfirmation(
+            event_id=event_id,
+            action=action,
+            reason=reason,
+            target_user_id=target_user_id,
+            votes=dict.fromkeys(moderator_ids, "pending"),
+            timeout_at=timeout_at,
+        )
+        LOGGER.debug(
+            "Pending {} for event {} registered (target={}, moderators={})",
+            action,
+            event_id,
+            target_user_id,
+            moderator_ids,
+        )
+
+    def get(
+        self, event_id: str, action: Literal["add_user", "remove_user", "close"]
+    ) -> PendingConfirmation | None:
+        """Get a pending confirmation."""
+        return self._entries.get(f"{event_id}:{action}")
+
+    def remove(
+        self, event_id: str, action: Literal["add_user", "remove_user", "close"]
+    ) -> None:
+        """Remove a pending confirmation."""
+        self._entries.pop(f"{event_id}:{action}", None)
+        LOGGER.debug("Pending {} for event {} removed", action, event_id)
+
+
 def get_timezone_store(
     interaction: discord.Interaction,
 ) -> TimezoneStore | None:
@@ -222,5 +273,16 @@ def get_event_store(interaction: discord.Interaction) -> EventStore | None:
     client = interaction.client
     store = getattr(client, "events", None)
     if isinstance(store, EventStore):
+        return store
+    return None
+
+
+def get_pending_confirmation_store(
+    interaction: discord.Interaction,
+) -> PendingConfirmationStore | None:
+    """Get the PendingConfirmationStore from the client."""
+    client = interaction.client
+    store = getattr(client, "pending_confirmations", None)
+    if isinstance(store, PendingConfirmationStore):
         return store
     return None

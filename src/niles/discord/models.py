@@ -1,14 +1,11 @@
 """Data models."""
 
-from collections.abc import Sequence  # noqa: TC003
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import UTC
 from datetime import datetime
 from typing import Literal
 from uuid import uuid4
-
-from niles.utils.loggers import LOGGER
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +62,7 @@ _ModVote = Literal["yes", "no", "pending"]
 
 
 @dataclass(slots=True)
-class _PendingConfirmation:
+class PendingConfirmation:
     """Pending moderator confirmation state."""
 
     event_id: str
@@ -76,53 +73,3 @@ class _PendingConfirmation:
     timeout_at: datetime | None
     message_id: int | None = None
     channel_id: int | None = None
-
-
-_PendingConfirmationRegistry: dict[str, _PendingConfirmation] = {}
-"""Registry of all pending confirmations by event_id + action key."""
-
-
-def _pending_key(event_id: str, action: str) -> str:
-    return f"{event_id}:{action}"
-
-
-def register_pending(  # noqa: PLR0913
-    event_id: str,
-    action: Literal["add_user", "remove_user", "close"],
-    reason: str | None,
-    target_user_id: int | None,
-    moderator_ids: Sequence[int],
-    timeout_at: datetime | None,
-) -> None:
-    """Register a pending confirmation."""
-    key = _pending_key(event_id, action)
-    _PendingConfirmationRegistry[key] = _PendingConfirmation(
-        event_id=event_id,
-        action=action,
-        reason=reason,
-        target_user_id=target_user_id,
-        votes=dict.fromkeys(moderator_ids, "pending"),
-        timeout_at=timeout_at,
-    )
-    LOGGER.debug(
-        "Pending {} for event {} registered (target={}, moderators={})",
-        action,
-        event_id,
-        target_user_id,
-        moderator_ids,
-    )
-
-
-def get_pending(
-    event_id: str, action: Literal["add_user", "remove_user", "close"]
-) -> _PendingConfirmation | None:
-    """Get a pending confirmation."""
-    return _PendingConfirmationRegistry.get(_pending_key(event_id, action))
-
-
-def remove_pending(
-    event_id: str, action: Literal["add_user", "remove_user", "close"]
-) -> None:
-    """Remove a pending confirmation."""
-    _PendingConfirmationRegistry.pop(_pending_key(event_id, action), None)
-    LOGGER.debug("Pending {} for event {} removed", action, event_id)
