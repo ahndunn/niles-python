@@ -1,12 +1,14 @@
 """Discord UI components."""
-# pyright: reportMissingTypeArgument=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
+# pyright: reportMissingTypeArgument=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownParameterType=false
 
 import contextlib
 from datetime import UTC
+from datetime import date
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from typing import Any
+from typing import ClassVar
 from typing import Literal
 from uuid import uuid4
 
@@ -31,88 +33,12 @@ from niles.discord.stores import EventStore
 from niles.discord.stores import ScheduleStore
 from niles.discord.stores import get_event_store
 from niles.discord.stores import get_timezone_store
-from niles.utils.datetime import format_offset
-from niles.utils.datetime import locale_to_offset_str
 from niles.utils.datetime import parse_offset
 from niles.utils.loggers import LOGGER
-
-_DAY_NAMES: dict[str, int] = {
-    "mon": 0,
-    "monday": 0,
-    "tue": 1,
-    "tuesday": 1,
-    "wed": 2,
-    "wednesday": 2,
-    "thu": 3,
-    "thursday": 3,
-    "fri": 4,
-    "friday": 4,
-    "sat": 5,
-    "saturday": 5,
-    "sun": 6,
-    "sunday": 6,
-}
 
 _TIMEOUT_MINUTES = 60
 _PREVIEW_LIMIT = 20
 _DISCORD_MAX_LINE_LENGTH = 80
-
-
-def _parse_day_names(raw: str) -> set[int] | None:
-    """Parse comma-separated day names into weekday numbers."""
-    if not raw.strip():
-        return None
-    parts = [p.strip().lower()[:3] for p in raw.split(",")]
-    result: set[int] = set()
-    for p in parts:
-        day = _DAY_NAMES.get(p)
-        if day is None:
-            msg = f"Unknown day: {p}"
-            raise ValueError(msg)
-        result.add(day)
-    return result
-
-
-def _generate_windows(  # noqa: PLR0913
-    start_date: str,
-    end_date: str,
-    start_time: str,
-    end_time: str,
-    days: str,
-    offset: timedelta = timedelta(0),
-) -> tuple[TimeWindow, ...]:
-    """Generate 15-minute time windows from parameters."""
-    sy, sm, sd = (int(x) for x in start_date.split("-"))
-    ey, em, ed_ = (int(x) for x in end_date.split("-"))
-    sh, smi = (int(x) for x in start_time.split(":"))
-    eh, emi = (int(x) for x in end_time.split(":"))
-
-    user_tz = timezone(offset)
-    sdate = datetime(sy, sm, sd, tzinfo=user_tz)
-    edate = datetime(ey, em, ed_, tzinfo=user_tz)
-    day_filter = _parse_day_names(days)
-
-    windows: list[TimeWindow] = []
-    current = sdate
-    while current <= edate:
-        if day_filter is None or current.weekday() in day_filter:
-            win_start = current.replace(
-                hour=sh, minute=smi, second=0, microsecond=0
-            )
-            win_end = current.replace(
-                hour=eh, minute=emi, second=0, microsecond=0
-            )
-            while win_start + timedelta(minutes=15) <= win_end:
-                w_end = win_start + timedelta(minutes=15)
-                windows.append(
-                    TimeWindow(
-                        start=win_start.astimezone(UTC),
-                        end=w_end.astimezone(UTC),
-                    )
-                )
-                win_start = w_end
-        current += timedelta(days=1)
-    return tuple(windows)
 
 
 def _fmt_range(w: TimeWindow, offset: timedelta = timedelta(0)) -> str:
@@ -132,6 +58,20 @@ def _fmt_short(w: TimeWindow, offset: timedelta = timedelta(0)) -> str:
     local_start = w.start.astimezone(user_tz)
     local_end = w.end.astimezone(user_tz)
     return f"{local_start.strftime('%H:%M')}-{local_end.strftime('%H:%M')}"
+
+
+def _merge_windows(windows: list[TimeWindow]) -> list[TimeWindow]:
+    """Merge consecutive time windows into larger ranges."""
+    if not windows:
+        return []
+    sorted_windows = sorted(windows, key=lambda w: w.start)
+    merged = [sorted_windows[0]]
+    for w in sorted_windows[1:]:
+        if w.start == merged[-1].end:
+            merged[-1] = TimeWindow(start=merged[-1].start, end=w.end)
+        else:
+            merged.append(w)
+    return merged
 
 
 def _compute_timeout(sent_at: datetime | None = None) -> datetime | None:
@@ -157,9 +97,9 @@ def _compute_timeout(sent_at: datetime | None = None) -> datetime | None:
 
 
 async def ensure_timezone(interaction: Interaction) -> timedelta | None:
-    """Check user has a timezone set; send setup modal if not.
+    """Check user has a timezone set; send setup view if not.
 
-    Returns the user's offset as a ``timedelta``, or ``None`` if the modal was
+    Returns the user's offset as a ``timedelta``, or ``None`` if the view was
     sent (handler should return early).
     """
     store = get_timezone_store(interaction)
@@ -172,133 +112,494 @@ async def ensure_timezone(interaction: Interaction) -> timedelta | None:
             return parsed
         store.set(interaction.user.id, "UTC+0")
         return timedelta(0)
-    modal = TimezoneSetupModal(interaction.locale)
-    await interaction.response.send_modal(modal)
+    view = TimezoneChangePrompt()
+    await interaction.response.send_message(
+        "Your timezone is set to **UTC+0** by default. "
+        "Would you like to change it?",
+        view=view,
+        ephemeral=True,
+    )
     return None
 
 
-class TimezoneSetupModal(Modal):
-    """One-time timezone setup modal with locale-based guess."""
+class TimezoneChangePrompt(View):
+    """Step 1: Ask if user wants to change from default UTC+0."""
 
-    def __init__(self, locale: discord.Locale | None) -> None:
+    def __init__(self) -> None:
         """Init."""
-        super().__init__(title="Set Your Timezone")
-        guessed = "UTC+0"
-        if locale is not None:
-            guessed = locale_to_offset_str(locale.value) or guessed
-        self._hint = TextInput(
-            label="Detected timezone (edit if wrong)",
-            placeholder="e.g. UTC+5, UTC-3, UTC+5:30",
-            default=guessed,
-            required=True,
-        )
-        self.add_item(self._hint)
+        super().__init__(timeout=300)
 
-    async def on_submit(self, interaction: Interaction) -> None:
-        """Save the timezone and tell user to re-run their command."""
-        offset_str = self._hint.value.strip()
-        parsed = parse_offset(offset_str)
-        if parsed is None:
-            await interaction.response.send_message(
-                f"Invalid offset: '{offset_str}'. "
-                "Use format like UTC+5, UTC-3, UTC+5:30.",
-                ephemeral=True,
-            )
-            return
+    @discord.ui.button(
+        label="Yes, change timezone", style=discord.ButtonStyle.primary
+    )
+    async def _yes_change(
+        self, interaction: Interaction, _button: Button
+    ) -> None:
+        """User wants to change timezone."""
+        view = TimezoneSignSelect()
+        await interaction.response.edit_message(
+            content="Is your timezone positive or negative (relative to UTC)?",
+            view=view,
+        )
+        self.stop()
+
+    @discord.ui.button(
+        label="No, keep UTC+0", style=discord.ButtonStyle.secondary
+    )
+    async def _no_keep(self, interaction: Interaction, _button: Button) -> None:
+        """Keep default UTC+0."""
         store = get_timezone_store(interaction)
         if store is not None:
-            store.set(interaction.user.id, format_offset(parsed))
+            store.set(interaction.user.id, "UTC+0")
+        LOGGER.info("Timezone set for user {}: UTC+0", interaction.user.id)
+        await interaction.response.edit_message(
+            content="✅ Timezone set to **UTC+0**.", view=None
+        )
+        self.stop()
+
+
+class TimezoneSignSelect(View):
+    """Step 2: Choose positive or negative offset."""
+
+    def __init__(self) -> None:
+        """Init."""
+        super().__init__(timeout=300)
+
+    @discord.ui.button(
+        label="Positive (UTC+0 to UTC+14)", style=discord.ButtonStyle.success
+    )
+    async def _positive(
+        self, interaction: Interaction, _button: Button
+    ) -> None:
+        """User chose positive offset."""
+        view = TimezoneHourSelect("+")
+        await interaction.response.edit_message(
+            content="Select your UTC hour offset:", view=view
+        )
+        self.stop()
+
+    @discord.ui.button(
+        label="Negative (UTC-1 to UTC-12)", style=discord.ButtonStyle.danger
+    )
+    async def _negative(
+        self, interaction: Interaction, _button: Button
+    ) -> None:
+        """User chose negative offset."""
+        view = TimezoneHourSelect("-")
+        await interaction.response.edit_message(
+            content="Select your UTC hour offset:", view=view
+        )
+        self.stop()
+
+
+class TimezoneHourSelect(View):
+    """Step 3: Select the hour offset."""
+
+    _SPECIAL_MINUTES: ClassVar[dict[str, dict[int, tuple[int, ...]]]] = {
+        "-": {3: (0, 30), 9: (0, 30)},
+        "+": {
+            3: (0, 30),
+            4: (0, 30),
+            5: (0, 30, 45),
+            6: (0, 30),
+            8: (0, 45),
+            9: (0, 30),
+            10: (0, 30),
+            12: (0, 45),
+        },
+    }
+
+    def __init__(self, sign: str) -> None:
+        """Init."""
+        super().__init__(timeout=300)
+        self._sign = sign
+
+        hours = list(range(15)) if sign == "+" else list(range(1, 13))
+
+        options = [
+            discord.SelectOption(label=f"UTC{sign}{h}", value=str(h))
+            for h in hours
+        ]
+        self._hour_select = Select(
+            placeholder="Select hour offset...", options=options
+        )
+        self._hour_select.callback = self._on_hour_select
+        self.add_item(self._hour_select)
+
+    async def _on_hour_select(self, interaction: Interaction) -> None:
+        """Handle hour selection."""
+        hour = int(self._hour_select.values[0])
+        sign = self._sign
+        special = self._SPECIAL_MINUTES.get(sign, {}).get(hour)
+
+        if special is None:
+            offset_str = f"UTC{sign}{hour}"
+            store = get_timezone_store(interaction)
+            if store is not None:
+                store.set(interaction.user.id, offset_str)
+            LOGGER.info(
+                "Timezone set for user {}: {}", interaction.user.id, offset_str
+            )
+            await interaction.response.edit_message(
+                content=f"✅ Timezone set to **{offset_str}**.", view=None
+            )
+        else:
+            view = TimezoneMinuteSelect(sign, hour, special)
+            await interaction.response.edit_message(
+                content="Select the minute offset:", view=view
+            )
+        self.stop()
+
+
+class TimezoneMinuteSelect(View):
+    """Step 4: Select the minute offset for special hours."""
+
+    def __init__(
+        self, sign: str, hour: int, minute_options: tuple[int, ...]
+    ) -> None:
+        """Init."""
+        super().__init__(timeout=300)
+        self._sign = sign
+        self._hour = hour
+
+        options = [
+            discord.SelectOption(
+                label=(
+                    f"UTC{sign}{hour}" if m == 0 else f"UTC{sign}{hour}:{m:02d}"
+                ),
+                value=str(m),
+            )
+            for m in minute_options
+        ]
+        self._minute_select = Select(
+            placeholder="Select minute offset...", options=options
+        )
+        self._minute_select.callback = self._on_minute_select
+        self.add_item(self._minute_select)
+
+    async def _on_minute_select(self, interaction: Interaction) -> None:
+        """Handle minute selection."""
+        minute = int(self._minute_select.values[0])
+        sign = self._sign
+        hour = self._hour
+
+        if minute == 0:
+            offset_str = f"UTC{sign}{hour}"
+        else:
+            offset_str = f"UTC{sign}{hour}:{minute:02d}"
+
+        store = get_timezone_store(interaction)
+        if store is not None:
+            store.set(interaction.user.id, offset_str)
         LOGGER.info(
-            "Timezone set for user {}: {}",
-            interaction.user.id,
-            format_offset(parsed),
+            "Timezone set for user {}: {}", interaction.user.id, offset_str
         )
-        await interaction.response.send_message(
-            f"✅ Timezone set to {format_offset(parsed)}. Re-run your command.",
-            ephemeral=True,
+        await interaction.response.edit_message(
+            content=f"✅ Timezone set to **{offset_str}**.", view=None
         )
+        self.stop()
 
 
-class ScheduleAddModal(Modal):
-    """Modal for adding free time windows."""
+class ScheduleDateRangeModal(Modal):
+    """Modal for picking a date range with year/month/day boxes."""
 
     def __init__(
         self, store: ScheduleStore, user_id: int, offset: timedelta
     ) -> None:
         """Init."""
-        super().__init__(title="Add Free Time")
+        super().__init__(title="Add Free Time - Select Dates")
         self._store = store
         self._user_id = user_id
         self._offset = offset
-        self._start_date = TextInput(
-            label="Start Date", placeholder="YYYY-MM-DD", required=True
+
+        now = datetime.now(UTC).astimezone(timezone(offset))
+
+        self._start_year = TextInput(
+            label="Start Year",
+            placeholder="2024",
+            default=str(now.year),
+            required=True,
+            min_length=4,
+            max_length=4,
         )
-        self._end_date = TextInput(
-            label="End Date", placeholder="YYYY-MM-DD", required=True
+        self._start_month = TextInput(
+            label="Start Month",
+            placeholder="1-12",
+            default=str(now.month),
+            required=True,
+            min_length=1,
+            max_length=2,
         )
-        self._start_time = TextInput(
-            label="Start Time", placeholder="HH:MM (24h)", required=True
+        self._start_day = TextInput(
+            label="Start Day",
+            placeholder="1-31",
+            default=str(now.day),
+            required=True,
+            min_length=1,
+            max_length=2,
         )
-        self._end_time = TextInput(
-            label="End Time", placeholder="HH:MM (24h)", required=True
+        week_later = now + timedelta(days=7)
+        self._end_year = TextInput(
+            label="End Year",
+            placeholder="2024",
+            default=str(week_later.year),
+            required=True,
+            min_length=4,
+            max_length=4,
         )
-        self._days = TextInput(
-            label="Days of Week (optional)",
-            placeholder="e.g. Mon,Wed,Fri or leave empty for all",
-            required=False,
+        self._end_month = TextInput(
+            label="End Month",
+            placeholder="1-12",
+            default=str(week_later.month),
+            required=True,
+            min_length=1,
+            max_length=2,
         )
-        self.add_item(self._start_date)
-        self.add_item(self._end_date)
-        self.add_item(self._start_time)
-        self.add_item(self._end_time)
-        self.add_item(self._days)
+        self._end_day = TextInput(
+            label="End Day",
+            placeholder="1-31",
+            default=str(week_later.day),
+            required=True,
+            min_length=1,
+            max_length=2,
+        )
+
+        self.add_item(self._start_year)
+        self.add_item(self._start_month)
+        self.add_item(self._start_day)
+        self.add_item(self._end_year)
+        self.add_item(self._end_month)
+        self.add_item(self._end_day)
 
     async def on_submit(self, interaction: Interaction) -> None:
         """Handle modal submission."""
         try:
-            windows = _generate_windows(
-                self._start_date.value,
-                self._end_date.value,
-                self._start_time.value,
-                self._end_time.value,
-                self._days.value,
-                self._offset,
-            )
-        except ValueError as e:
-            LOGGER.warning(
-                "Invalid input in ScheduleAddModal for user {}: {}",
-                interaction.user.id,
-                e,
-            )
+            sy = int(self._start_year.value)
+            sm = int(self._start_month.value)
+            sd = int(self._start_day.value)
+            ey = int(self._end_year.value)
+            em = int(self._end_month.value)
+            ed_ = int(self._end_day.value)
+        except ValueError:
             await interaction.response.send_message(
-                f"Invalid input: {e}", ephemeral=True
+                "Invalid date values. Enter numbers.", ephemeral=True
             )
             return
-        if not windows:
-            LOGGER.warning(
-                "No windows generated in ScheduleAddModal for user {}",
-                interaction.user.id,
-            )
+
+        try:
+            start = date(sy, sm, sd)
+            end = date(ey, em, ed_)
+        except ValueError:
             await interaction.response.send_message(
-                "No windows generated. Check your date/time range.",
-                ephemeral=True,
+                "Invalid date. Check year/month/day.", ephemeral=True
             )
             return
-        preview_items = windows[:_PREVIEW_LIMIT]
-        preview = "\n".join(_fmt_range(w, self._offset) for w in preview_items)
-        if len(windows) > _PREVIEW_LIMIT:
-            preview += f"\n... and {len(windows) - _PREVIEW_LIMIT} more"
-        LOGGER.debug(
-            "ScheduleAddModal: user {} generated {} windows",
-            interaction.user.id,
-            len(windows),
+
+        if start > end:
+            await interaction.response.send_message(
+                "Start date must be before end date.", ephemeral=True
+            )
+            return
+
+        dates: list[date] = []
+        current = start
+        while current <= end:
+            dates.append(current)
+            current += timedelta(days=1)
+
+        configs: dict[int, tuple[str, str]] = {}
+        view = ScheduleDateConfigView(
+            self._store, self._user_id, self._offset, dates, configs
         )
-        view = ConfirmWindowsView(self._store, self._user_id, windows)
+        await interaction.response.send_message(
+            f"Configure time ranges for each date ({len(dates)} dates).",
+            view=view,
+            ephemeral=True,
+        )
+
+
+class ScheduleDateConfigView(View):
+    """Interactive view for per-date time configuration."""
+
+    def __init__(
+        self,
+        store: ScheduleStore,
+        user_id: int,
+        offset: timedelta,
+        dates: list[date],
+        configs: dict[int, tuple[str, str]],
+    ) -> None:
+        """Init."""
+        super().__init__(timeout=300)
+        self._store = store
+        self._user_id = user_id
+        self._offset = offset
+        self._dates = dates
+        self._configs = configs
+
+        unconfigured = [(i, d) for i, d in enumerate(dates) if i not in configs]
+        if unconfigured:
+            options = [
+                discord.SelectOption(
+                    label=d.strftime("%a %Y-%m-%d"), value=str(i)
+                )
+                for i, d in unconfigured[:25]
+            ]
+            sel = Select(
+                options=options,
+                placeholder="Pick a date to configure...",
+                row=0,
+            )
+            sel.callback = self._on_select_date
+            self.add_item(sel)
+
+        if configs:
+            confirm = Button(
+                label="Confirm & Save", style=discord.ButtonStyle.success, row=1
+            )
+            confirm.callback = self._on_confirm
+            self.add_item(confirm)
+
+    async def _on_select_date(self, interaction: Interaction) -> None:
+        """Open a modal to set time for the selected date."""
+        for child in self.children:
+            if isinstance(child, Select) and child.values:
+                idx = int(child.values[0])
+                break
+        else:
+            return
+        date_ = self._dates[idx]
+        existing = self._configs.get(idx)
+        modal = ScheduleDateModal(
+            date_,
+            existing,
+            self._configs,
+            idx,
+            self._offset,
+            self._store,
+            self._user_id,
+            self._dates,
+        )
+        await interaction.response.send_modal(modal)
+
+    async def _on_confirm(self, interaction: Interaction) -> None:
+        """Generate windows from per-date configs and show preview."""
+        windows: list[TimeWindow] = []
+        user_tz = timezone(self._offset)
+        for idx, (st, et) in self._configs.items():
+            d = self._dates[idx]
+            try:
+                sh, smi = (int(x) for x in st.split(":"))
+                eh, emi = (int(x) for x in et.split(":"))
+            except ValueError:
+                continue
+            win_start = datetime(
+                d.year, d.month, d.day, sh, smi, tzinfo=user_tz
+            ).astimezone(UTC)
+            win_end = datetime(
+                d.year, d.month, d.day, eh, emi, tzinfo=user_tz
+            ).astimezone(UTC)
+            while win_start + timedelta(minutes=15) <= win_end:
+                w_end = win_start + timedelta(minutes=15)
+                windows.append(TimeWindow(start=win_start, end=w_end))
+                win_start = w_end
+
+        if not windows:
+            await interaction.response.send_message(
+                "No windows generated. Check your time ranges.", ephemeral=True
+            )
+            return
+
+        windows = _merge_windows(windows)
+        windows_t = tuple(windows)
+
+        preview_items = windows_t[:_PREVIEW_LIMIT]
+        preview = "\n".join(_fmt_range(w, self._offset) for w in preview_items)
+        if len(windows_t) > _PREVIEW_LIMIT:
+            preview += f"\n... and {len(windows_t) - _PREVIEW_LIMIT} more"
+
+        view = ConfirmWindowsView(self._store, self._user_id, windows_t)
         msg = (
-            f"Generated {len(windows)} time windows:\n"
+            f"Generated {len(windows_t)} windows:\n"
             f"```\n{preview}\n```\nConfirm?"
         )
         await interaction.response.send_message(msg, view=view, ephemeral=True)
+
+
+class ScheduleDateModal(Modal):
+    """Modal for setting time range for a specific date."""
+
+    def __init__(  # noqa: PLR0913
+        self,
+        date_: date,
+        existing: tuple[str, str] | None,
+        configs: dict[int, tuple[str, str]],
+        date_idx: int,
+        offset: timedelta,
+        store: ScheduleStore,
+        user_id: int,
+        dates: list[date],
+    ) -> None:
+        """Init."""
+        super().__init__(title=f"Time for {date_.strftime('%a %Y-%m-%d')}")
+        self._date = date_
+        self._configs = configs
+        self._date_idx = date_idx
+        self._offset = offset
+        self._store = store
+        self._user_id = user_id
+        self._dates = dates
+
+        default_start = existing[0] if existing else "09:00"
+        default_end = existing[1] if existing else "17:00"
+
+        self._start_time = TextInput(
+            label="Start Time",
+            placeholder="HH:MM (24h)",
+            default=default_start,
+            required=True,
+            min_length=5,
+            max_length=5,
+        )
+        self._end_time = TextInput(
+            label="End Time",
+            placeholder="HH:MM (24h)",
+            default=default_end,
+            required=True,
+            min_length=5,
+            max_length=5,
+        )
+        self.add_item(self._start_time)
+        self.add_item(self._end_time)
+
+    async def on_submit(self, interaction: Interaction) -> None:
+        """Handle modal submission."""
+        st = self._start_time.value
+        et = self._end_time.value
+        try:
+            sh, smi = (int(x) for x in st.split(":"))
+            eh, emi = (int(x) for x in et.split(":"))
+        except ValueError:
+            await interaction.response.send_message(
+                "Invalid time format. Use HH:MM.", ephemeral=True
+            )
+            return
+
+        if eh < sh or (eh == sh and emi <= smi):
+            await interaction.response.send_message(
+                "End time must be after start time.", ephemeral=True
+            )
+            return
+
+        self._configs[self._date_idx] = (st, et)
+        new_view = ScheduleDateConfigView(
+            self._store, self._user_id, self._offset, self._dates, self._configs
+        )
+        await interaction.response.send_message(
+            f"Time set for {self._date.strftime('%a %Y-%m-%d')}: {st}-{et}",
+            view=new_view,
+            ephemeral=True,
+        )
 
 
 class ConfirmWindowsView(View):
@@ -509,6 +810,369 @@ class ClearReasonModal(Modal):
         await interaction.response.send_message(
             f"Cleared {len(removed)} future entries.", ephemeral=True
         )
+
+
+class EventRoleSelectView(View):
+    """Select mod/participant role for event add/remove."""
+
+    def __init__(
+        self, action_type: Literal["add", "remove"], target_user: discord.User
+    ) -> None:
+        """Init."""
+        super().__init__(timeout=120)
+        self._action_type: Literal["add", "remove", "close"] = action_type
+        self._target_user = target_user
+        verb = "Add" if action_type == "add" else "Remove"
+        options = [
+            discord.SelectOption(
+                label="Moderator",
+                value="mod",
+                description=f"{verb} as moderator",
+            ),
+            discord.SelectOption(
+                label="Participant",
+                value="user",
+                description=f"{verb} as participant",
+            ),
+        ]
+        sel = Select(options=options, placeholder=f"{verb} as...", row=0)
+        sel.callback = self._on_select
+        self.add_item(sel)
+
+    async def _on_select(self, interaction: Interaction) -> None:
+        """Handle role selection, then show event picker."""
+        for child in self.children:
+            if isinstance(child, Select) and child.values:
+                role = child.values[0]
+                break
+        else:
+            return
+        view = EventSelectView(
+            interaction, self._action_type, self._target_user, role
+        )
+        await interaction.response.edit_message(
+            content="Select an event:", view=view
+        )
+
+
+class EventSelectView(View):
+    """Select an event from a dropdown."""
+
+    def __init__(
+        self,
+        interaction: Interaction,
+        action_type: Literal["add", "remove", "close"],
+        target_user: discord.User | None,
+        role: str | None = None,
+    ) -> None:
+        """Init."""
+        super().__init__(timeout=120)
+        self._action_type = action_type
+        self._target_user = target_user
+        self._role = role
+
+        store = get_event_store(interaction)
+        events: list[EventData] = []
+        if store is not None:
+            events = [e for e in store.get_all_events() if not e.is_closed]
+
+        options = [
+            discord.SelectOption(
+                label=e.name,
+                value=e.id,
+                description=e.window.start.strftime("%Y-%m-%d"),
+            )
+            for e in events[:25]
+        ]
+        if not options:
+            options.append(
+                discord.SelectOption(label="No events available", value="none")
+            )
+        sel = Select(options=options, placeholder="Choose an event", row=0)
+        sel.callback = self._on_select
+        self.add_item(sel)
+
+    async def _on_select(self, interaction: Interaction) -> None:
+        """Handle event selection."""
+        for child in self.children:
+            if isinstance(child, Select) and child.values:
+                event_id = child.values[0]
+                break
+        else:
+            return
+
+        if event_id == "none":
+            return
+
+        store = get_event_store(interaction)
+        if store is None:
+            return
+        ev = store.get_event(event_id)
+        if ev is None:
+            await interaction.response.send_message(
+                "Event not found.", ephemeral=True
+            )
+            return
+
+        if self._action_type == "close":
+            await self._proceed_close(interaction, store, ev)
+        elif self._action_type == "remove":
+            await self._proceed_remove(interaction, store, ev)
+        else:
+            await self._proceed_add(interaction, store, ev)
+
+    async def _proceed_add(
+        self,
+        interaction: Interaction,
+        store: EventStore,  # noqa: ARG002
+        ev: EventData,
+    ) -> None:
+        """Handle add action."""
+        target = self._target_user
+        if target is None:
+            return
+        target_id = target.id
+
+        if self._role == "mod":
+            if interaction.user.id != ev.creator_id:
+                await interaction.response.send_message(
+                    "Only the event creator can add moderators.", ephemeral=True
+                )
+                return
+            if target_id in ev.moderator_ids:
+                await interaction.response.send_message(
+                    "User is already a moderator.", ephemeral=True
+                )
+                return
+            view = ModInvitationView(ev.id, target_id, ev.guild_id)
+            with contextlib.suppress(discord.Forbidden):
+                await target.send(
+                    f"You've been invited to moderate **{ev.name}**!", view=view
+                )
+            await interaction.response.edit_message(
+                content=f"Invitation sent to {target.mention}.", view=None
+            )
+            LOGGER.info(
+                "Mod invitation sent to user {} for event {} by user {}",
+                target_id,
+                ev.id,
+                interaction.user.id,
+            )
+        else:
+            if interaction.user.id not in ev.moderator_ids:
+                await interaction.response.send_message(
+                    "Only moderators can add users.", ephemeral=True
+                )
+                return
+            if target_id in ev.participant_ids:
+                await interaction.response.send_message(
+                    "User is already participating.", ephemeral=True
+                )
+                return
+            schedule_store = getattr(interaction.client, "schedules", None)
+            if isinstance(schedule_store, ScheduleStore):
+                free_ids = schedule_store.get_free_user_ids(ev.window)
+                if target_id not in free_ids:
+                    await interaction.response.send_message(
+                        "Cannot add an occupied user to this event.",
+                        ephemeral=True,
+                    )
+                    return
+
+            mod_ids = list(ev.moderator_ids)
+            view = ModConfirmationView(
+                event_id=ev.id,
+                action="add_user",
+                reason=None,
+                target_user_id=target_id,
+                moderator_ids=mod_ids,
+                guild_id=ev.guild_id,
+            )
+            await interaction.response.edit_message(
+                content=(
+                    f"Proposal to add {target.mention} "
+                    f"to **{ev.name}**.\nModerators, please vote:"
+                ),
+                view=view,
+            )
+            LOGGER.info(
+                "Add-user proposal for event {} targeting {} "
+                "initiated by user {}",
+                ev.id,
+                target_id,
+                interaction.user.id,
+            )
+
+    async def _proceed_remove(
+        self, interaction: Interaction, store: EventStore, ev: EventData
+    ) -> None:
+        """Handle remove action."""
+        target = self._target_user
+        if target is None:
+            return
+        target_id = target.id
+
+        if self._role == "mod":
+            if interaction.user.id != ev.creator_id:
+                await interaction.response.send_message(
+                    "Only the event creator can remove moderators.",
+                    ephemeral=True,
+                )
+                return
+            if target_id not in ev.moderator_ids:
+                await interaction.response.send_message(
+                    "User is not a moderator.", ephemeral=True
+                )
+                return
+            modal = EventRemoveReasonModal(store, ev, target_id, "mod")
+            await interaction.response.send_modal(modal)
+        else:
+            if interaction.user.id not in ev.moderator_ids:
+                await interaction.response.send_message(
+                    "Only moderators can remove users.", ephemeral=True
+                )
+                return
+            if target_id not in ev.participant_ids:
+                await interaction.response.send_message(
+                    "User is not participating.", ephemeral=True
+                )
+                return
+            modal = EventRemoveReasonModal(store, ev, target_id, "user")
+            await interaction.response.send_modal(modal)
+
+    async def _proceed_close(
+        self,
+        interaction: Interaction,
+        store: EventStore,  # noqa: ARG002
+        ev: EventData,
+    ) -> None:
+        """Handle close action."""
+        if interaction.user.id not in ev.moderator_ids:
+            await interaction.response.send_message(
+                "Only moderators can close events.", ephemeral=True
+            )
+            return
+        if ev.is_closed:
+            await interaction.response.send_message(
+                "Event is already closed.", ephemeral=True
+            )
+            return
+
+        mod_ids = list(ev.moderator_ids)
+        view = ModConfirmationView(
+            event_id=ev.id,
+            action="close",
+            reason=None,
+            target_user_id=None,
+            moderator_ids=mod_ids,
+            guild_id=ev.guild_id,
+        )
+        await interaction.response.edit_message(
+            content=(
+                f"Proposal to close **{ev.name}**.\n"
+                f"All moderators must approve:"
+            ),
+            view=view,
+        )
+        LOGGER.info(
+            "Close proposal for event {} initiated by user {}",
+            ev.id,
+            interaction.user.id,
+        )
+
+
+class EventRemoveReasonModal(Modal):
+    """Modal for providing reason when removing from event."""
+
+    def __init__(
+        self,
+        store: EventStore,
+        event: EventData,
+        target_user_id: int,
+        role: str,
+    ) -> None:
+        """Init."""
+        super().__init__(title=f"Remove {role} from {event.name[:45]}")
+        self._store = store
+        self._event = event
+        self._target_user_id = target_user_id
+        self._role = role
+        self._reason = TextInput(
+            label="Reason",
+            placeholder="Why are you removing this user?",
+            required=True,
+            style=discord.TextStyle.paragraph,
+        )
+        self.add_item(self._reason)
+
+    async def on_submit(self, interaction: Interaction) -> None:
+        """Handle modal submission."""
+        reason = self._reason.value
+        if self._role == "mod":
+            new_mods = tuple(
+                mid
+                for mid in self._event.moderator_ids
+                if mid != self._target_user_id
+            )
+            updated = EventData(
+                id=self._event.id,
+                name=self._event.name,
+                creator_id=self._event.creator_id,
+                guild_id=self._event.guild_id,
+                window=self._event.window,
+                participant_ids=self._event.participant_ids,
+                moderator_ids=new_mods,
+                participant_thread_id=self._event.participant_thread_id,
+                moderator_thread_id=self._event.moderator_thread_id,
+                is_closed=self._event.is_closed,
+                created_at=self._event.created_at,
+            )
+            self._store.update_event(updated)
+            if self._event.moderator_thread_id and interaction.guild:
+                mod_thread = interaction.guild.get_thread(
+                    self._event.moderator_thread_id
+                )
+                if mod_thread is not None:
+                    await mod_thread.send(
+                        f"<@{self._target_user_id}> has been removed "
+                        f"as moderator. Reason: {reason}"
+                    )
+            LOGGER.info(
+                "Moderator {} removed from event {} by user {} (reason={})",
+                self._target_user_id,
+                self._event.id,
+                interaction.user.id,
+                reason,
+            )
+            await interaction.response.send_message(
+                f"Removed <@{self._target_user_id}> from moderators.",
+                ephemeral=True,
+            )
+        else:
+            mod_ids = list(self._event.moderator_ids)
+            view = ModConfirmationView(
+                event_id=self._event.id,
+                action="remove_user",
+                reason=reason,
+                target_user_id=self._target_user_id,
+                moderator_ids=mod_ids,
+                guild_id=self._event.guild_id,
+            )
+            await interaction.response.send_message(
+                f"Proposal to remove <@{self._target_user_id}> "
+                f"from **{self._event.name}**.\n"
+                f"Reason: {reason}\n"
+                f"Moderators, please vote:",
+                view=view,
+            )
+            LOGGER.info(
+                "Remove-user proposal for event {} targeting {} "
+                "initiated by user {} (reason={})",
+                self._event.id,
+                self._target_user_id,
+                interaction.user.id,
+                reason,
+            )
 
 
 class ModInvitationView(View):

@@ -17,8 +17,8 @@ from niles.discord.models import EventData
 from niles.discord.models import TimeWindow
 from niles.discord.stores import get_event_store
 from niles.discord.stores import get_schedule_store
-from niles.discord.views import ModConfirmationView
-from niles.discord.views import ModInvitationView
+from niles.discord.views import EventRoleSelectView
+from niles.discord.views import EventSelectView
 from niles.discord.views import ensure_timezone
 from niles.utils.loggers import LOGGER
 
@@ -32,11 +32,33 @@ class CreateEventModal(Modal):
         """Init."""
         super().__init__(title="Create Event")
         self._offset = offset
+        now = datetime.now(UTC).astimezone(timezone(offset))
         self._name: TextInput = TextInput(
             label="Event Name", placeholder="Enter event name", required=True
         )
-        self._date: TextInput = TextInput(
-            label="Date", placeholder="YYYY-MM-DD", required=True
+        self._year: TextInput = TextInput(
+            label="Year",
+            placeholder="2024",
+            default=str(now.year),
+            required=True,
+            min_length=4,
+            max_length=4,
+        )
+        self._month: TextInput = TextInput(
+            label="Month",
+            placeholder="1-12",
+            default=str(now.month),
+            required=True,
+            min_length=1,
+            max_length=2,
+        )
+        self._day: TextInput = TextInput(
+            label="Day",
+            placeholder="1-31",
+            default=str(now.day),
+            required=True,
+            min_length=1,
+            max_length=2,
         )
         self._start_time: TextInput = TextInput(
             label="Start Time", placeholder="HH:MM (24h)", required=True
@@ -45,14 +67,18 @@ class CreateEventModal(Modal):
             label="End Time", placeholder="HH:MM (24h)", required=True
         )
         self.add_item(self._name)
-        self.add_item(self._date)
+        self.add_item(self._year)
+        self.add_item(self._month)
+        self.add_item(self._day)
         self.add_item(self._start_time)
         self.add_item(self._end_time)
 
     async def on_submit(self, interaction: Interaction) -> None:  # noqa: C901
         """Handle event creation submission."""
         try:
-            sy, sm, sd = (int(x) for x in self._date.value.split("-"))
+            sy = int(self._year.value)
+            sm = int(self._month.value)
+            sd = int(self._day.value)
             sh, smi = (int(x) for x in self._start_time.value.split(":"))
             eh, emi = (int(x) for x in self._end_time.value.split(":"))
         except ValueError as e:
@@ -210,382 +236,57 @@ async def event_create(interaction: Interaction) -> None:
     await interaction.response.send_modal(modal)
 
 
-@event_group.command(name="add-mod", description="Add a moderator to an event")
-async def event_add_mod(
-    interaction: Interaction, event: str, user: discord.User
-) -> None:
-    """Send a moderator invitation to a user."""
+@event_group.command(
+    name="add", description="Add a moderator or participant to an event"
+)
+async def event_add(interaction: Interaction, user: discord.User) -> None:
+    """Add a moderator or participant to an event (with event picker)."""
     LOGGER.info(
-        "User {} used /event add-mod targeting {}", interaction.user.id, user.id
+        "User {} used /event add targeting {}", interaction.user.id, user.id
     )
     store = get_event_store(interaction)
     if store is None:
-        LOGGER.error(
-            "EventStore unavailable for user {} in /event add-mod",
-            interaction.user.id,
-        )
         await interaction.response.send_message(
             "Store not available.", ephemeral=True
         )
         return
-    ev = store.get_event(event)
-    if ev is None:
-        LOGGER.warning(
-            "Event {} not found for user {} in /event add-mod",
-            event,
-            interaction.user.id,
-        )
-        await interaction.response.send_message(
-            "Event not found.", ephemeral=True
-        )
-        return
-    if interaction.user.id != ev.creator_id:
-        LOGGER.warning(
-            "User {} is not creator of event {} attempted /event add-mod",
-            interaction.user.id,
-            event,
-        )
-        await interaction.response.send_message(
-            "Only the event creator can add moderators.", ephemeral=True
-        )
-        return
-    if user.id in ev.moderator_ids:
-        LOGGER.warning(
-            "User {} is already a moderator of event {}", user.id, event
-        )
-        await interaction.response.send_message(
-            "User is already a moderator.", ephemeral=True
-        )
-        return
-    view = ModInvitationView(ev.id, user.id, ev.guild_id)
-    with contextlib.suppress(discord.Forbidden):
-        await user.send(
-            f"You've been invited to moderate **{ev.name}**!", view=view
-        )
-    LOGGER.info(
-        "Mod invitation sent to user {} for event {} by user {}",
-        user.id,
-        event,
-        interaction.user.id,
-    )
+    view = EventRoleSelectView("add", user)
     await interaction.response.send_message(
-        f"Invitation sent to {user.mention}.", ephemeral=True
+        f"Select role for {user.mention}:", view=view, ephemeral=True
     )
 
 
 @event_group.command(
-    name="remove-mod", description="Remove a moderator from an event"
+    name="remove", description="Remove a moderator or participant from an event"
 )
-async def event_remove_mod(
-    interaction: Interaction, event: str, user: discord.User, why: str
-) -> None:
-    """Remove a moderator from an event."""
+async def event_remove(interaction: Interaction, user: discord.User) -> None:
+    """Remove a moderator or participant from an event (with event picker)."""
     LOGGER.info(
-        "User {} used /event remove-mod targeting {}",
-        interaction.user.id,
-        user.id,
+        "User {} used /event remove targeting {}", interaction.user.id, user.id
     )
     store = get_event_store(interaction)
     if store is None:
-        LOGGER.error(
-            "EventStore unavailable for user {} in /event remove-mod",
-            interaction.user.id,
-        )
         await interaction.response.send_message(
             "Store not available.", ephemeral=True
         )
         return
-    ev = store.get_event(event)
-    if ev is None:
-        LOGGER.warning(
-            "Event {} not found for user {} in /event remove-mod",
-            event,
-            interaction.user.id,
-        )
-        await interaction.response.send_message(
-            "Event not found.", ephemeral=True
-        )
-        return
-    if interaction.user.id != ev.creator_id:
-        LOGGER.warning(
-            "User {} is not creator of event {} attempted /event remove-mod",
-            interaction.user.id,
-            event,
-        )
-        await interaction.response.send_message(
-            "Only the event creator can remove moderators.", ephemeral=True
-        )
-        return
-    if user.id not in ev.moderator_ids:
-        LOGGER.warning("User {} is not a moderator of event {}", user.id, event)
-        await interaction.response.send_message(
-            "User is not a moderator.", ephemeral=True
-        )
-        return
-    new_mods = tuple(mid for mid in ev.moderator_ids if mid != user.id)
-    updated = EventData(
-        id=ev.id,
-        name=ev.name,
-        creator_id=ev.creator_id,
-        guild_id=ev.guild_id,
-        window=ev.window,
-        participant_ids=ev.participant_ids,
-        moderator_ids=new_mods,
-        participant_thread_id=ev.participant_thread_id,
-        moderator_thread_id=ev.moderator_thread_id,
-        is_closed=ev.is_closed,
-        created_at=ev.created_at,
-    )
-    store.update_event(updated)
-
-    if ev.moderator_thread_id and interaction.guild:
-        mod_thread = interaction.guild.get_thread(ev.moderator_thread_id)
-        if mod_thread is not None:
-            await mod_thread.send(
-                f"<@{user.id}> has been removed as moderator. Reason: {why}"
-            )
-
-    LOGGER.info(
-        "Moderator {} removed from event {} by user {} (reason={})",
-        user.id,
-        event,
-        interaction.user.id,
-        why,
-    )
+    view = EventRoleSelectView("remove", user)
     await interaction.response.send_message(
-        f"Removed {user.mention} from moderators.", ephemeral=True
-    )
-
-
-@event_group.command(name="add-user", description="Add a user to an event")
-async def event_add_user(
-    interaction: Interaction, event: str, user: discord.User
-) -> None:
-    """Propose adding a user to an event."""
-    LOGGER.info(
-        "User {} used /event add-user targeting {} for event {}",
-        interaction.user.id,
-        user.id,
-        event,
-    )
-    store = get_event_store(interaction)
-    if store is None:
-        LOGGER.error(
-            "EventStore unavailable for user {} in /event add-user",
-            interaction.user.id,
-        )
-        await interaction.response.send_message(
-            "Store not available.", ephemeral=True
-        )
-        return
-    ev = store.get_event(event)
-    if ev is None:
-        LOGGER.warning(
-            "Event {} not found for user {} in /event add-user",
-            event,
-            interaction.user.id,
-        )
-        await interaction.response.send_message(
-            "Event not found.", ephemeral=True
-        )
-        return
-    if interaction.user.id not in ev.moderator_ids:
-        LOGGER.warning(
-            "User {} is not a moderator of event {} attempted /event add-user",
-            interaction.user.id,
-            event,
-        )
-        await interaction.response.send_message(
-            "Only moderators can add users.", ephemeral=True
-        )
-        return
-    if user.id in ev.participant_ids:
-        LOGGER.warning(
-            "User {} is already a participant of event {}", user.id, event
-        )
-        await interaction.response.send_message(
-            "User is already participating.", ephemeral=True
-        )
-        return
-
-    schedule_store = get_schedule_store(interaction)
-    if schedule_store is not None:
-        free_ids = schedule_store.get_free_user_ids(ev.window)
-        if user.id not in free_ids:
-            LOGGER.warning(
-                "User {} is occupied and cannot be added to event {}",
-                user.id,
-                event,
-            )
-            await interaction.response.send_message(
-                "Cannot add an occupied user to this event.", ephemeral=True
-            )
-            return
-
-    mod_ids = list(ev.moderator_ids)
-    view = ModConfirmationView(
-        event_id=ev.id,
-        action="add_user",
-        reason=None,
-        target_user_id=user.id,
-        moderator_ids=mod_ids,
-        guild_id=ev.guild_id,
-    )
-    LOGGER.info(
-        "Add-user proposal for event {} targeting {} initiated by user {}",
-        event,
-        user.id,
-        interaction.user.id,
-    )
-    await interaction.response.send_message(
-        f"Proposal to add {user.mention} to **{ev.name}**.\n"
-        f"Moderators, please vote:",
-        view=view,
-    )
-
-
-@event_group.command(
-    name="remove-user", description="Remove a user from an event"
-)
-async def event_remove_user(
-    interaction: Interaction, event: str, user: discord.User, reason: str
-) -> None:
-    """Propose removing a user from an event."""
-    LOGGER.info(
-        "User {} used /event remove-user targeting {} for event {}",
-        interaction.user.id,
-        user.id,
-        event,
-    )
-    store = get_event_store(interaction)
-    if store is None:
-        LOGGER.error(
-            "EventStore unavailable for user {} in /event remove-user",
-            interaction.user.id,
-        )
-        await interaction.response.send_message(
-            "Store not available.", ephemeral=True
-        )
-        return
-    ev = store.get_event(event)
-    if ev is None:
-        LOGGER.warning(
-            "Event {} not found for user {} in /event remove-user",
-            event,
-            interaction.user.id,
-        )
-        await interaction.response.send_message(
-            "Event not found.", ephemeral=True
-        )
-        return
-    if interaction.user.id not in ev.moderator_ids:
-        LOGGER.warning(
-            "User {} is not a mod of event {} attempted /event remove-user",
-            interaction.user.id,
-            event,
-        )
-        await interaction.response.send_message(
-            "Only moderators can remove users.", ephemeral=True
-        )
-        return
-    if user.id not in ev.participant_ids:
-        LOGGER.warning(
-            "User {} is not a participant of event {}", user.id, event
-        )
-        await interaction.response.send_message(
-            "User is not participating.", ephemeral=True
-        )
-        return
-
-    mod_ids = list(ev.moderator_ids)
-    view = ModConfirmationView(
-        event_id=ev.id,
-        action="remove_user",
-        reason=reason,
-        target_user_id=user.id,
-        moderator_ids=mod_ids,
-        guild_id=ev.guild_id,
-    )
-    LOGGER.info(
-        "Remove-user proposal for event {} targeting {} "
-        "initiated by user {} (reason={})",
-        event,
-        user.id,
-        interaction.user.id,
-        reason,
-    )
-    await interaction.response.send_message(
-        f"Proposal to remove {user.mention} from **{ev.name}**.\n"
-        f"Reason: {reason}\n"
-        f"Moderators, please vote:",
-        view=view,
+        f"Select role for {user.mention}:", view=view, ephemeral=True
     )
 
 
 @event_group.command(name="close", description="Close an event")
-async def event_close(interaction: Interaction, event: str) -> None:
-    """Close an event with all moderator confirmation."""
-    LOGGER.info(
-        "User {} used /event close for event {}", interaction.user.id, event
-    )
+async def event_close(interaction: Interaction) -> None:
+    """Close an event with all moderator confirmation (with event picker)."""
+    LOGGER.info("User {} used /event close", interaction.user.id)
     store = get_event_store(interaction)
     if store is None:
-        LOGGER.error(
-            "EventStore unavailable for user {} in /event close",
-            interaction.user.id,
-        )
         await interaction.response.send_message(
             "Store not available.", ephemeral=True
         )
         return
-    ev = store.get_event(event)
-    if ev is None:
-        LOGGER.warning(
-            "Event {} not found for user {} in /event close",
-            event,
-            interaction.user.id,
-        )
-        await interaction.response.send_message(
-            "Event not found.", ephemeral=True
-        )
-        return
-    if interaction.user.id not in ev.moderator_ids:
-        LOGGER.warning(
-            "User {} is not a moderator of event {} attempted /event close",
-            interaction.user.id,
-            event,
-        )
-        await interaction.response.send_message(
-            "Only moderators can close events.", ephemeral=True
-        )
-        return
-    if ev.is_closed:
-        LOGGER.warning(
-            "Event {} is already closed, close attempted by user {}",
-            event,
-            interaction.user.id,
-        )
-        await interaction.response.send_message(
-            "Event is already closed.", ephemeral=True
-        )
-        return
-
-    mod_ids = list(ev.moderator_ids)
-    view = ModConfirmationView(
-        event_id=ev.id,
-        action="close",
-        reason=None,
-        target_user_id=None,
-        moderator_ids=mod_ids,
-        guild_id=ev.guild_id,
-    )
-    LOGGER.info(
-        "Close proposal for event {} initiated by user {}",
-        event,
-        interaction.user.id,
-    )
+    view = EventSelectView(interaction, "close", target_user=None, role=None)
     await interaction.response.send_message(
-        f"Proposal to close **{ev.name}**.\n"
-        f"All moderators must approve (no timeout):",
-        view=view,
+        "Select an event to close:", view=view, ephemeral=True
     )
