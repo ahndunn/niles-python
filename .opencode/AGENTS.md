@@ -34,6 +34,9 @@
   - Incorrect: `niles/utils/utils.py`.
 - The root package (`niles/`) uses the project name. Everything underneath is a resource.
 
+### Class organization
+- At most one class per module. If a module defines two or more classes, split it into a subpackage with each class in its own dedicated module.
+
 ## Protocols before implementations
 
 - Define `typing.Protocol` classes before writing concrete implementations.
