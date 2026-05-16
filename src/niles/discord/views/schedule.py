@@ -395,9 +395,21 @@ class ScheduleDateConfigView(NilesView):
             return
         date_ = self._ctx.dates[idx]
         existing = self._ctx.configs.get(idx)
+        known = (
+            (
+                (
+                    int(existing[0].split(":")[0]),
+                    int(existing[0].split(":")[1]),
+                    int(existing[1].split(":")[0]),
+                    int(existing[1].split(":")[1]),
+                )
+            )
+            if existing
+            else None
+        )
         await interaction.response.edit_message(
             content=f"Set time for **{date_.strftime('%a %Y-%m-%d')}**:",
-            view=ScheduleTimeSelectView(self._ctx, idx, date_, existing),
+            view=ScheduleTimeSelectView(self._ctx, idx, date_, known),
         )
 
     async def _on_confirm(self, interaction: Interaction) -> None:
@@ -454,22 +466,28 @@ class ScheduleTimeSelectView(NilesView):
         ctx: _ScheduleEditContext,
         date_idx: int,
         date_: date,
-        existing: tuple[str, str] | None,
+        known: (
+            tuple[int | None, int | None, int | None, int | None] | None
+        ) = None,
     ) -> None:
         """Init."""
         super().__init__(timeout=300)
         self._ctx = ctx
         self._date_idx = date_idx
         self._date = date_
-        self._start_h: int | None = None
-        self._start_m: int | None = None
-        self._end_h: int | None = None
-        self._end_m: int | None = None
 
-        default_s = existing[0] if existing else "09:00"
-        default_e = existing[1] if existing else "17:00"
-        ds_h, ds_m = (int(x) for x in default_s.split(":"))
-        de_h, de_m = (int(x) for x in default_e.split(":"))
+        if known is not None:
+            self._start_h, self._start_m, self._end_h, self._end_m = known
+            ds_h = known[0] if known[0] is not None else 9
+            ds_m = known[1] if known[1] is not None else 0
+            de_h = known[2] if known[2] is not None else 17
+            de_m = known[3] if known[3] is not None else 0
+        else:
+            self._start_h = None
+            self._start_m = None
+            self._end_h = None
+            self._end_m = None
+            ds_h, ds_m, de_h, de_m = 9, 0, 17, 0
 
         hour_opts = [
             discord.SelectOption(label=f"{h:02d}", value=str(h))
@@ -481,76 +499,111 @@ class ScheduleTimeSelectView(NilesView):
         ]
 
         self._sh_sel: Select[Any] = Select(
-            options=hour_opts, placeholder="Start hour", row=0
+            options=self._mark_default(hour_opts, str(ds_h)),
+            placeholder="Start hour",
+            row=0,
         )
         self._sh_sel.callback = self._on_sh
-        if existing:
-            self._sh_sel.options = [
-                o
-                if o.value != str(ds_h)
-                else discord.SelectOption(
-                    label=o.label, value=o.value, default=True
-                )
-                for o in self._sh_sel.options
-            ]
         self.add_item(self._sh_sel)
 
         self._sm_sel: Select[Any] = Select(
-            options=min_opts, placeholder="Start minute", row=1
+            options=self._mark_default(min_opts, str(ds_m)),
+            placeholder="Start minute",
+            row=1,
         )
         self._sm_sel.callback = self._on_sm
-        if existing:
-            self._sm_sel.options = [
-                o
-                if o.value != str(ds_m)
-                else discord.SelectOption(
-                    label=o.label, value=o.value, default=True
-                )
-                for o in self._sm_sel.options
-            ]
         self.add_item(self._sm_sel)
 
+        if self._start_h is not None:
+            end_hour_opts = [
+                discord.SelectOption(label=f"{h:02d}", value=str(h))
+                for h in range(self._start_h, 24)
+            ]
+        else:
+            end_hour_opts = hour_opts
+
         self._eh_sel: Select[Any] = Select(
-            options=hour_opts, placeholder="End hour", row=2
+            options=self._mark_default(end_hour_opts, str(de_h)),
+            placeholder="End hour",
+            row=2,
         )
         self._eh_sel.callback = self._on_eh
-        if existing:
-            self._eh_sel.options = [
-                o
-                if o.value != str(de_h)
-                else discord.SelectOption(
-                    label=o.label, value=o.value, default=True
-                )
-                for o in self._eh_sel.options
-            ]
         self.add_item(self._eh_sel)
 
+        if (
+            self._start_h is not None
+            and self._start_m is not None
+            and self._end_h is not None
+            and self._end_h == self._start_h
+        ):
+            end_min_opts = [
+                discord.SelectOption(label=f"{m:02d}", value=str(m))
+                for m in (0, 15, 30, 45)
+                if m > self._start_m
+            ] or min_opts
+        else:
+            end_min_opts = min_opts
+
         self._em_sel: Select[Any] = Select(
-            options=min_opts, placeholder="End minute", row=3
+            options=self._mark_default(end_min_opts, str(de_m)),
+            placeholder="End minute",
+            row=3,
         )
         self._em_sel.callback = self._on_em
-        if existing:
-            self._em_sel.options = [
-                o
-                if o.value != str(de_m)
-                else discord.SelectOption(
-                    label=o.label, value=o.value, default=True
-                )
-                for o in self._em_sel.options
-            ]
         self.add_item(self._em_sel)
 
+    @staticmethod
+    def _mark_default(
+        options: list[discord.SelectOption], value: str
+    ) -> list[discord.SelectOption]:
+        """Mark the matching option as default."""
+        return [
+            o
+            if o.value != value
+            else discord.SelectOption(
+                label=o.label, value=o.value, default=True
+            )
+            for o in options
+        ]
+
     async def _on_sh(self, interaction: Interaction) -> None:
-        self._start_h = int(self._sh_sel.values[0])
-        await self._maybe_save(interaction)
+        val = int(self._sh_sel.values[0])
+        if val == self._start_h:
+            await interaction.response.defer()
+            return
+        view = ScheduleTimeSelectView(
+            self._ctx,
+            self._date_idx,
+            self._date,
+            (val, self._start_m, self._end_h, self._end_m),
+        )
+        await interaction.response.edit_message(view=view)
 
     async def _on_sm(self, interaction: Interaction) -> None:
-        self._start_m = int(self._sm_sel.values[0])
-        await self._maybe_save(interaction)
+        val = int(self._sm_sel.values[0])
+        if val == self._start_m:
+            await interaction.response.defer()
+            return
+        view = ScheduleTimeSelectView(
+            self._ctx,
+            self._date_idx,
+            self._date,
+            (self._start_h, val, self._end_h, self._end_m),
+        )
+        await interaction.response.edit_message(view=view)
 
     async def _on_eh(self, interaction: Interaction) -> None:
-        self._end_h = int(self._eh_sel.values[0])
-        await self._maybe_save(interaction)
+        val = int(self._eh_sel.values[0])
+        if val == self._end_h:
+            await interaction.response.defer()
+            return
+        view = ScheduleTimeSelectView(
+            self._ctx,
+            self._date_idx,
+            self._date,
+            (self._start_h, self._start_m, val, self._end_m),
+        )
+        await interaction.response.edit_message(view=view)
 
     async def _on_em(self, interaction: Interaction) -> None:
         self._end_m = int(self._em_sel.values[0])
@@ -575,7 +628,7 @@ class ScheduleTimeSelectView(NilesView):
                     f" Set time for **{self._date.strftime('%a %Y-%m-%d')}**:"
                 ),
                 view=ScheduleTimeSelectView(
-                    self._ctx, self._date_idx, self._date, (st, et)
+                    self._ctx, self._date_idx, self._date, (sh, sm, eh, em)
                 ),
             )
             return
