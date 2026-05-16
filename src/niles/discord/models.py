@@ -61,7 +61,7 @@ class EventData:
 _ModVote = Literal["yes", "no", "pending"]
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class PendingConfirmation:
     """Pending moderator confirmation state."""
 

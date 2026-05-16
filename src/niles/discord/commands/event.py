@@ -1,5 +1,4 @@
 """Event commands."""
-# pyright: reportMissingTypeArgument=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
 
 import calendar
 import contextlib
@@ -7,6 +6,8 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from typing import Any
+from typing import cast
 
 import discord
 from discord import Interaction
@@ -36,10 +37,10 @@ class EventNameStep(View):
 
     @discord.ui.button(label="Start", style=discord.ButtonStyle.primary)
     async def start_btn(  # noqa: D102
-        self, interaction: Interaction, _button: Button
+        self, interaction: Interaction, _button: Button[Any]
     ) -> None:
         for child in self.children:
-            child.disabled = True  # type: ignore[reportAttributeAccessIssue]
+            cast("Any", child).disabled = True
         await interaction.response.edit_message(
             content="**Step 1/7: Event Name**\nType the event name below:",
             view=self,
@@ -91,7 +92,9 @@ class EventYearSelect(View):
             discord.SelectOption(label=str(y), value=str(y))
             for y in range(current_year, current_year + 5)
         ]
-        sel = Select(options=options, placeholder="Select year", row=0)
+        sel: Select[Any] = Select(
+            options=options, placeholder="Select year", row=0
+        )
         sel.callback = self._on_select
         self.add_item(sel)
 
@@ -117,7 +120,9 @@ class EventMonthSelect(View):
             discord.SelectOption(label=str(m), value=str(m))
             for m in range(1, 13)
         ]
-        sel = Select(options=options, placeholder="Select month (1-12)", row=0)
+        sel: Select[Any] = Select(
+            options=options, placeholder="Select month (1-12)", row=0
+        )
         sel.callback = self._on_select
         self.add_item(sel)
 
@@ -147,7 +152,9 @@ class EventDaySelect(View):
             discord.SelectOption(label=str(d), value=str(d))
             for d in range(1, max_day + 1)
         ]
-        sel = Select(options=options, placeholder="Select day", row=0)
+        sel: Select[Any] = Select(
+            options=options, placeholder="Select day", row=0
+        )
         sel.callback = self._on_select
         self.add_item(sel)
 
@@ -182,7 +189,7 @@ class EventStartTimeSelect(View):
             discord.SelectOption(label=f"{h:02d}", value=str(h))
             for h in range(24)
         ]
-        self._hour_sel = Select(
+        self._hour_sel: Select[Any] = Select(
             options=hour_options, placeholder="Start hour", row=0
         )
         self._hour_sel.callback = self._on_hour
@@ -192,7 +199,7 @@ class EventStartTimeSelect(View):
             discord.SelectOption(label=f"{m:02d}", value=str(m))
             for m in (0, 15, 30, 45)
         ]
-        self._min_sel = Select(
+        self._min_sel: Select[Any] = Select(
             options=minute_options, placeholder="Start minute", row=1
         )
         self._min_sel.callback = self._on_minute
@@ -255,7 +262,7 @@ class EventEndTimeSelect(View):
             discord.SelectOption(label=f"{h:02d}", value=str(h))
             for h in range(24)
         ]
-        self._hour_sel = Select(
+        self._hour_sel: Select[Any] = Select(
             options=hour_options, placeholder="End hour", row=0
         )
         self._hour_sel.callback = self._on_hour
@@ -265,7 +272,7 @@ class EventEndTimeSelect(View):
             discord.SelectOption(label=f"{m:02d}", value=str(m))
             for m in (0, 15, 30, 45)
         ]
-        self._min_sel = Select(
+        self._min_sel: Select[Any] = Select(
             options=minute_options, placeholder="End minute", row=1
         )
         self._min_sel.callback = self._on_minute
@@ -347,10 +354,10 @@ class EventConfirmView(View):
 
     @discord.ui.button(label="Create Event", style=discord.ButtonStyle.success)
     async def create_btn(  # noqa: D102
-        self, interaction: Interaction, _button: Button
+        self, interaction: Interaction, _button: Button[Any]
     ) -> None:
         for child in self.children:
-            child.disabled = True  # type: ignore[reportAttributeAccessIssue]
+            cast("Any", child).disabled = True
 
         schedule_store = get_schedule_store(interaction)
         free_user_ids: set[int] = set()
@@ -400,10 +407,10 @@ class EventConfirmView(View):
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger)
     async def cancel_btn(  # noqa: D102
-        self, interaction: Interaction, _button: Button
+        self, interaction: Interaction, _button: Button[Any]
     ) -> None:
         for child in self.children:
-            child.disabled = True  # type: ignore[reportAttributeAccessIssue]
+            cast("Any", child).disabled = True
         await interaction.response.edit_message(
             content="Event creation cancelled.", view=self
         )
@@ -492,8 +499,10 @@ async def _finalize_event(
 
 def _first_val(interaction: Interaction) -> str | None:
     """Extract the first selected value from a Select interaction."""
-    for child in interaction.data.get("components", []):  # type: ignore[reportAttributeAccessIssue]
-        for comp in child.get("components", []):
+    data = cast("dict[str, Any]", interaction.data)
+    for child in data.get("components", []):
+        comps = cast("list[dict[str, Any]]", child.get("components", []))
+        for comp in comps:
             vals = comp.get("values", [])
             if vals:
                 return vals[0]

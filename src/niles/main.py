@@ -24,7 +24,7 @@ async def main() -> None:
 
     try:
         await client.start(settings.DISCORD_TOKEN)
-    except BaseException:
+    except Exception:
         LOGGER.exception("Unhandled exception")
         await LOGGER.complete()
         raise

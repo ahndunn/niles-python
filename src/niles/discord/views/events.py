@@ -1,11 +1,12 @@
 """Event management UI components."""
-# pyright: reportMissingTypeArgument=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownParameterType=false
 
 import contextlib
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
+from typing import Any
 from typing import Literal
+from typing import cast
 
 import discord
 from discord import Interaction
@@ -69,7 +70,9 @@ class EventRoleSelectView(View):
                 description=f"{verb} as participant",
             ),
         ]
-        sel = Select(options=options, placeholder=f"{verb} as...", row=0)
+        sel: Select[Any] = Select(
+            options=options, placeholder=f"{verb} as...", row=0
+        )
         sel.callback = self._on_select
         self.add_item(sel)
 
@@ -122,7 +125,9 @@ class EventSelectView(View):
             options.append(
                 discord.SelectOption(label="No events available", value="none")
             )
-        sel = Select(options=options, placeholder="Choose an event", row=0)
+        sel: Select[Any] = Select(
+            options=options, placeholder="Choose an event", row=0
+        )
         sel.callback = self._on_select
         self.add_item(sel)
 
@@ -210,15 +215,16 @@ class EventSelectView(View):
                     )
                     return
 
-            mod_ids = list(ev.moderator_ids)
+            pc_store = cast(
+                "PendingConfirmationStore",
+                cast("Any", interaction.client).pending_confirmations,
+            )
             view = ModConfirmationView(
-                event_id=ev.id,
+                event=ev,
                 action="add_user",
                 reason=None,
                 target_user_id=target_id,
-                moderator_ids=mod_ids,
-                guild_id=ev.guild_id,
-                store=interaction.client.pending_confirmations,  # type: ignore[reportAttributeAccessIssue]
+                store=pc_store,
             )
             await interaction.response.edit_message(
                 content=(
@@ -281,15 +287,16 @@ class EventSelectView(View):
         self, interaction: Interaction, ev: EventData
     ) -> None:
         """Handle accepted request."""
-        mod_ids = list(ev.moderator_ids)
+        pc_store = cast(
+            "PendingConfirmationStore",
+            cast("Any", interaction.client).pending_confirmations,
+        )
         view = ModConfirmationView(
-            event_id=ev.id,
+            event=ev,
             action="close",
             reason=None,
             target_user_id=None,
-            moderator_ids=mod_ids,
-            guild_id=ev.guild_id,
-            store=interaction.client.pending_confirmations,  # type: ignore[reportAttributeAccessIssue]
+            store=pc_store,
         )
         await interaction.response.edit_message(
             content=(
@@ -335,7 +342,9 @@ class EventRemoveReasonView(View):
                 label="Other (type reason)", value="__other__"
             ),
         ]
-        sel = Select(options=reasons, placeholder="Select a reason", row=0)
+        sel: Select[Any] = Select(
+            options=reasons, placeholder="Select a reason", row=0
+        )
         sel.callback = self._on_select
         self.add_item(sel)
 
@@ -421,15 +430,16 @@ class EventRemoveReasonView(View):
                 ephemeral=True,
             )
         else:
-            mod_ids = list(self._event.moderator_ids)
+            pc_store = cast(
+                "PendingConfirmationStore",
+                cast("Any", interaction.client).pending_confirmations,
+            )
             view = ModConfirmationView(
-                event_id=self._event.id,
+                event=self._event,
                 action="remove_user",
                 reason=reason,
                 target_user_id=self._target_user_id,
-                moderator_ids=mod_ids,
-                guild_id=self._event.guild_id,
-                store=interaction.client.pending_confirmations,  # type: ignore[reportAttributeAccessIssue]
+                store=pc_store,
             )
             await interaction.followup.send(
                 f"Proposal to remove <@{self._target_user_id}> "
@@ -463,11 +473,13 @@ class ModInvitationView(View):
     async def _disable_all(self, interaction: Interaction) -> None:
         """Disable all children."""
         for child in self.children:
-            child.disabled = True  # type: ignore[reportAttributeAccessIssue]
+            cast("Any", child).disabled = True
         await interaction.response.edit_message(view=self)
 
     @discord.ui.button(label="Accept", style=discord.ButtonStyle.success)
-    async def accept(self, interaction: Interaction, _button: Button) -> None:
+    async def accept(
+        self, interaction: Interaction, _button: Button[Any]
+    ) -> None:
         """Accept the moderator invitation."""
         if interaction.user.id != self._target_user_id:
             LOGGER.warning(
@@ -523,7 +535,9 @@ class ModInvitationView(View):
                 await mod_thread.add_user(interaction.user)
 
     @discord.ui.button(label="Decline", style=discord.ButtonStyle.danger)
-    async def decline(self, interaction: Interaction, _button: Button) -> None:
+    async def decline(
+        self, interaction: Interaction, _button: Button[Any]
+    ) -> None:
         """Decline the moderator invitation."""
         if interaction.user.id != self._target_user_id:
             LOGGER.warning(
@@ -549,42 +563,43 @@ class ModInvitationView(View):
 class ModConfirmationView(View):
     """Confirmation view for moderator actions."""
 
-    def __init__(  # noqa: PLR0913 — modal params correspond to event data fields
+    def __init__(
         self,
-        event_id: str,
+        event: EventData,
         action: Literal["add_user", "remove_user", "close"],
         reason: str | None,
         target_user_id: int | None,
-        moderator_ids: list[int],
-        guild_id: int,
         store: PendingConfirmationStore,
     ) -> None:
         """Init."""
         super().__init__(timeout=86400)
-        self._event_id = event_id
+        self._event_id = event.id
         self._store = store
         self._action: Literal["add_user", "remove_user", "close"] = action
         self._reason = reason
         self._target_user_id = target_user_id
-        self._guild_id = guild_id
+        self._guild_id = event.guild_id
         deadline = None if action == "close" else _compute_timeout()
-        store.register(
-            event_id=event_id,
+        pending = PendingConfirmation(
+            event_id=event.id,
             action=action,
             reason=reason,
             target_user_id=target_user_id,
-            moderator_ids=moderator_ids,
+            votes=dict.fromkeys(event.moderator_ids, "pending"),
             timeout_at=deadline,
         )
+        store.register(pending)
 
     async def _disable_all(self, interaction: Interaction) -> None:
         """Disable all children."""
         for child in self.children:
-            child.disabled = True  # type: ignore[reportAttributeAccessIssue]
+            cast("Any", child).disabled = True
         await interaction.response.edit_message(view=self)
 
     @discord.ui.button(label="Yes", style=discord.ButtonStyle.success)
-    async def yes_btn(self, interaction: Interaction, _button: Button) -> None:
+    async def yes_btn(
+        self, interaction: Interaction, _button: Button[Any]
+    ) -> None:
         """Vote yes on the action."""
         mod_id = interaction.user.id
         pending = self._store.get(self._event_id, self._action)
@@ -609,7 +624,11 @@ class ModConfirmationView(View):
                 "You are not a moderator for this event.", ephemeral=True
             )
             return
-        pending.votes[mod_id] = "yes"
+        updated = self._store.record_vote(
+            self._event_id, self._action, mod_id, "yes"
+        )
+        if updated is None:
+            return
         LOGGER.info(
             "User {} voted yes on {} for event {}",
             mod_id,
@@ -617,10 +636,12 @@ class ModConfirmationView(View):
             self._event_id,
         )
         await interaction.response.send_message("Voted yes.", ephemeral=True)
-        await self._check_complete(interaction, pending)
+        await self._check_complete(interaction, updated)
 
     @discord.ui.button(label="No", style=discord.ButtonStyle.danger)
-    async def no_btn(self, interaction: Interaction, _button: Button) -> None:
+    async def no_btn(
+        self, interaction: Interaction, _button: Button[Any]
+    ) -> None:
         """Vote no on the action."""
         if self._action == "close":
             LOGGER.warning(
@@ -664,7 +685,7 @@ class ModConfirmationView(View):
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel_btn(
-        self, interaction: Interaction, _button: Button
+        self, interaction: Interaction, _button: Button[Any]
     ) -> None:
         """Cancel the action entirely."""
         pending = self._store.get(self._event_id, self._action)
@@ -920,7 +941,9 @@ class NoReasonView(View):
                 label="Other (type reason)", value="__other__"
             ),
         ]
-        sel = Select(options=reasons, placeholder="Select a reason", row=0)
+        sel: Select[Any] = Select(
+            options=reasons, placeholder="Select a reason", row=0
+        )
         sel.callback = self._on_select
         self.add_item(sel)
 
@@ -960,7 +983,9 @@ class NoReasonView(View):
                 content=f"Reason: {reason}", view=None
             )
 
-        pending = self._store.get(self._event_id, self._action)
+        pending = self._store.reject_with_reason(
+            self._event_id, self._action, self._mod_id, reason
+        )
         if pending is None:
             LOGGER.warning(
                 "NoReasonView: no pending {} for event {}",
@@ -971,8 +996,6 @@ class NoReasonView(View):
                 "Confirmation no longer active.", ephemeral=True
             )
             return
-        pending.votes[self._mod_id] = "no"
-        pending.reason = reason
         LOGGER.info(
             "User {} voted no on {} for event {} (reason={})",
             self._mod_id,
@@ -1013,11 +1036,13 @@ class JoinEventView(View):
     async def _disable_all(self, interaction: Interaction) -> None:
         """Disable all children."""
         for child in self.children:
-            child.disabled = True  # type: ignore[reportAttributeAccessIssue]
+            cast("Any", child).disabled = True
         await interaction.response.edit_message(view=self)
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.success)
-    async def join_btn(self, interaction: Interaction, _button: Button) -> None:
+    async def join_btn(
+        self, interaction: Interaction, _button: Button[Any]
+    ) -> None:
         """Accept the invitation to join."""
         if interaction.user.id != self._target_user_id:
             LOGGER.warning(
@@ -1085,7 +1110,7 @@ class JoinEventView(View):
 
     @discord.ui.button(label="Decline", style=discord.ButtonStyle.danger)
     async def decline_btn(
-        self, interaction: Interaction, _button: Button
+        self, interaction: Interaction, _button: Button[Any]
     ) -> None:
         """Decline the invitation."""
         if interaction.user.id != self._target_user_id:
@@ -1120,8 +1145,10 @@ class JoinEventView(View):
 
 def _first_val(interaction: Interaction) -> str | None:
     """Extract the first selected value from a Select interaction."""
-    for child in interaction.data.get("components", []):  # type: ignore[reportAttributeAccessIssue]
-        for comp in child.get("components", []):
+    data = cast("dict[str, Any]", interaction.data)
+    for child in data.get("components", []):
+        comps = cast("list[dict[str, Any]]", child.get("components", []))
+        for comp in comps:
             vals = comp.get("values", [])
             if vals:
                 return vals[0]

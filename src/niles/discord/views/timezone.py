@@ -1,12 +1,13 @@
 """Timezone setup UI components."""
-# pyright: reportMissingTypeArgument=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownParameterType=false
 
 from datetime import timedelta
+from typing import Any
 from typing import ClassVar
 
 import discord
 from discord import Interaction
 from discord.ui import Button
+from discord.ui import Select
 from discord.ui import View
 
 from niles.discord.stores import get_timezone_store
@@ -51,7 +52,7 @@ class TimezoneChangePrompt(View):
         label="Yes, change timezone", style=discord.ButtonStyle.primary
     )
     async def _yes_change(
-        self, interaction: Interaction, _button: Button
+        self, interaction: Interaction, _button: Button[Any]
     ) -> None:
         """User wants to change timezone."""
         view = TimezoneSignSelect()
@@ -64,7 +65,9 @@ class TimezoneChangePrompt(View):
     @discord.ui.button(
         label="No, keep UTC+0", style=discord.ButtonStyle.secondary
     )
-    async def _no_keep(self, interaction: Interaction, _button: Button) -> None:
+    async def _no_keep(
+        self, interaction: Interaction, _button: Button[Any]
+    ) -> None:
         """Keep default UTC+0."""
         store = get_timezone_store(interaction)
         if store is not None:
@@ -87,7 +90,7 @@ class TimezoneSignSelect(View):
         label="Positive (UTC+0 to UTC+14)", style=discord.ButtonStyle.success
     )
     async def _positive(
-        self, interaction: Interaction, _button: Button
+        self, interaction: Interaction, _button: Button[Any]
     ) -> None:
         """User chose positive offset."""
         view = TimezoneHourSelect("+")
@@ -100,7 +103,7 @@ class TimezoneSignSelect(View):
         label="Negative (UTC-1 to UTC-12)", style=discord.ButtonStyle.danger
     )
     async def _negative(
-        self, interaction: Interaction, _button: Button
+        self, interaction: Interaction, _button: Button[Any]
     ) -> None:
         """User chose negative offset."""
         view = TimezoneHourSelect("-")
@@ -138,7 +141,7 @@ class TimezoneHourSelect(View):
             discord.SelectOption(label=f"UTC{sign}{h}", value=str(h))
             for h in hours
         ]
-        self._hour_select = discord.ui.Select(
+        self._hour_select: Select[Any] = discord.ui.Select(
             placeholder="Select hour offset...", options=options
         )
         self._hour_select.callback = self._on_hour_select
@@ -189,7 +192,7 @@ class TimezoneMinuteSelect(View):
             )
             for m in minute_options
         ]
-        self._minute_select = discord.ui.Select(
+        self._minute_select: Select[Any] = discord.ui.Select(
             placeholder="Select minute offset...", options=options
         )
         self._minute_select.callback = self._on_minute_select

@@ -1,13 +1,16 @@
 """Schedule (free time) UI components."""
-# pyright: reportMissingTypeArgument=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownParameterType=false
 
 import calendar
+from dataclasses import dataclass
+from dataclasses import replace
 from datetime import UTC
 from datetime import date
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from typing import TYPE_CHECKING
+from typing import Any
+from typing import cast
 from uuid import uuid4
 
 import discord
@@ -26,8 +29,10 @@ if TYPE_CHECKING:
 
 def _first_val(interaction: Interaction) -> str | None:
     """Extract the first selected value from a Select interaction."""
-    for child in interaction.data.get("components", []):  # type: ignore[reportAttributeAccessIssue]
-        for comp in child.get("components", []):
+    data = cast("dict[str, Any]", interaction.data)
+    for child in data.get("components", []):
+        comps = cast("list[dict[str, Any]]", child.get("components", []))
+        for comp in comps:
             vals = comp.get("values", [])
             if vals:
                 return vals[0]
@@ -56,6 +61,17 @@ def _fmt_short(w: TimeWindow, offset: timedelta = timedelta(0)) -> str:
     return f"{local_start.strftime('%H:%M')}-{local_end.strftime('%H:%M')}"
 
 
+@dataclass(frozen=True, slots=True)
+class _DateRangeState:
+    """Accumulated state for date range selection wizard."""
+
+    sy: int = 0
+    sm: int = 0
+    sd: int = 0
+    ey: int = 0
+    em: int = 0
+
+
 def _merge_windows(windows: list[TimeWindow]) -> list[TimeWindow]:
     """Merge consecutive time windows into larger ranges."""
     if not windows:
@@ -81,7 +97,7 @@ class ScheduleDateRangeView(View):
         self._user_id = user_id
         self._offset = offset
         now = datetime.now(UTC).astimezone(timezone(offset))
-        sel = Select(
+        sel: Select[Any] = Select(
             options=[
                 discord.SelectOption(label=str(y), value=str(y))
                 for y in range(now.year, now.year + 5)
@@ -95,7 +111,11 @@ class ScheduleDateRangeView(View):
             if val is None:
                 return
             nv = _ScheduleDatePickView(
-                self._store, self._user_id, self._offset, 2, start_year=int(val)
+                self._store,
+                self._user_id,
+                self._offset,
+                2,
+                _DateRangeState(sy=int(val)),
             )
             await interaction.response.edit_message(
                 content=f"Start year: **{val}**. Select start month:", view=nv
@@ -108,28 +128,20 @@ class ScheduleDateRangeView(View):
 class _ScheduleDatePickView(View):
     """Recursive step view for building a start/end date range."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         store: ScheduleStore,
         user_id: int,
         offset: timedelta,
-        step: int,  # 1=start_year, 2=start_month, 3=start_day, 4=end_year, 5=end_month, 6=end_day  # noqa: E501
-        start_year: int = 0,
-        start_month: int = 0,
-        start_day: int = 0,
-        end_year: int = 0,
-        end_month: int = 0,
+        step: int,
+        state: _DateRangeState | None = None,
     ) -> None:
         super().__init__(timeout=300)
         self._store = store
         self._user_id = user_id
         self._offset = offset
         self._step = step
-        self._sy = start_year
-        self._sm = start_month
-        self._sd = start_day
-        self._ey = end_year
-        self._em = end_month
+        self._state = _DateRangeState() if state is None else state
         self._make_select()
 
     def _make_select(self) -> None:
@@ -150,7 +162,7 @@ class _ScheduleDatePickView(View):
             ]
         elif self._step == 3:  # noqa: PLR2004
             title = "Start Day"
-            max_d = calendar.monthrange(self._sy, self._sm)[1]
+            max_d = calendar.monthrange(self._state.sy, self._state.sm)[1]
             opts = [
                 discord.SelectOption(label=str(d), value=str(d))
                 for d in range(1, max_d + 1)
@@ -159,7 +171,7 @@ class _ScheduleDatePickView(View):
             title = "End Year"
             opts = [
                 discord.SelectOption(label=str(y), value=str(y))
-                for y in range(self._sy, self._sy + 5)
+                for y in range(self._state.sy, self._state.sy + 5)
             ]
         elif self._step == 5:  # noqa: PLR2004
             title = "End Month"
@@ -169,13 +181,15 @@ class _ScheduleDatePickView(View):
             ]
         else:
             title = "End Day"
-            max_d = calendar.monthrange(self._ey, self._em)[1]
+            max_d = calendar.monthrange(self._state.ey, self._state.em)[1]
             opts = [
                 discord.SelectOption(label=str(d), value=str(d))
                 for d in range(1, max_d + 1)
             ]
 
-        sel = Select(options=opts, placeholder=f"Select {title}", row=0)
+        sel: Select[Any] = Select(
+            options=opts, placeholder=f"Select {title}", row=0
+        )
         sel.callback = self._on_pick
         self.add_item(sel)
 
@@ -186,7 +200,11 @@ class _ScheduleDatePickView(View):
 
         if self._step == 1:
             nv = _ScheduleDatePickView(
-                self._store, self._user_id, self._offset, 2, start_year=int(val)
+                self._store,
+                self._user_id,
+                self._offset,
+                2,
+                replace(self._state, sy=int(val)),
             )
             await interaction.response.edit_message(
                 content=f"Start year: **{val}**. Select start month:", view=nv
@@ -197,8 +215,7 @@ class _ScheduleDatePickView(View):
                 self._user_id,
                 self._offset,
                 3,
-                start_year=self._sy,
-                start_month=int(val),
+                replace(self._state, sm=int(val)),
             )
             await interaction.response.edit_message(
                 content=f"Start month: **{val}**. Select start day:", view=nv
@@ -209,14 +226,12 @@ class _ScheduleDatePickView(View):
                 self._user_id,
                 self._offset,
                 4,
-                start_year=self._sy,
-                start_month=self._sm,
-                start_day=int(val),
+                replace(self._state, sd=int(val)),
             )
             await interaction.response.edit_message(
                 content=(
-                    f"Start date: **{self._sy}-{self._sm:02d}-{int(val):02d}**."
-                    " Select end year:"
+                    f"Start date: **{self._state.sy}-{self._state.sm:02d}"
+                    f"-{int(val):02d}**. Select end year:"
                 ),
                 view=nv,
             )
@@ -226,10 +241,7 @@ class _ScheduleDatePickView(View):
                 self._user_id,
                 self._offset,
                 5,
-                start_year=self._sy,
-                start_month=self._sm,
-                start_day=self._sd,
-                end_year=int(val),
+                replace(self._state, ey=int(val)),
             )
             await interaction.response.edit_message(
                 content=f"End year: **{val}**. Select end month:", view=nv
@@ -240,11 +252,7 @@ class _ScheduleDatePickView(View):
                 self._user_id,
                 self._offset,
                 6,
-                start_year=self._sy,
-                start_month=self._sm,
-                start_day=self._sd,
-                end_year=self._ey,
-                end_month=int(val),
+                replace(self._state, em=int(val)),
             )
             await interaction.response.edit_message(
                 content=f"End month: **{val}**. Select end day:", view=nv
@@ -252,8 +260,8 @@ class _ScheduleDatePickView(View):
         else:
             end_day = int(val)
             try:
-                start = date(self._sy, self._sm, self._sd)
-                end = date(self._ey, self._em, end_day)
+                start = date(self._state.sy, self._state.sm, self._state.sd)
+                end = date(self._state.ey, self._state.em, end_day)
             except ValueError:
                 await interaction.response.edit_message(
                     content="Invalid date. Use `/schedule add` to start over.",
@@ -274,9 +282,14 @@ class _ScheduleDatePickView(View):
                 current += timedelta(days=1)
 
             configs: dict[int, tuple[str, str]] = {}
-            view = ScheduleDateConfigView(
-                self._store, self._user_id, self._offset, dates, configs
+            ctx = _ScheduleEditContext(
+                store=self._store,
+                user_id=self._user_id,
+                offset=self._offset,
+                dates=dates,
+                configs=configs,
             )
+            view = ScheduleDateConfigView(ctx)
             content = (
                 f"Date range: **{start}** to **{end}** ({len(dates)} days).\n"
                 f"Set time ranges for each date by selecting it below, "
@@ -292,26 +305,30 @@ class _ScheduleDatePickView(View):
             await interaction.response.edit_message(content=content, view=view)
 
 
+@dataclass(frozen=True, slots=True)
+class _ScheduleEditContext:
+    """Context for schedule editing views."""
+
+    store: ScheduleStore
+    user_id: int
+    offset: timedelta
+    dates: list[date]
+    configs: dict[int, tuple[str, str]]
+
+
 class ScheduleDateConfigView(View):
     """Interactive view for per-date time configuration."""
 
-    def __init__(
-        self,
-        store: ScheduleStore,
-        user_id: int,
-        offset: timedelta,
-        dates: list[date],
-        configs: dict[int, tuple[str, str]],
-    ) -> None:
+    def __init__(self, ctx: _ScheduleEditContext) -> None:
         """Init."""
         super().__init__(timeout=300)
-        self._store = store
-        self._user_id = user_id
-        self._offset = offset
-        self._dates = dates
-        self._configs = configs
+        self._ctx = ctx
 
-        unconfigured = [(i, d) for i, d in enumerate(dates) if i not in configs]
+        unconfigured = [
+            (i, d)
+            for i, d in enumerate(self._ctx.dates)
+            if i not in self._ctx.configs
+        ]
         if unconfigured:
             options = [
                 discord.SelectOption(
@@ -319,7 +336,7 @@ class ScheduleDateConfigView(View):
                 )
                 for i, d in unconfigured[:25]
             ]
-            sel = Select(
+            sel: Select[Any] = Select(
                 options=options,
                 placeholder="Pick a date to configure...",
                 row=0,
@@ -327,8 +344,8 @@ class ScheduleDateConfigView(View):
             sel.callback = self._on_select_date
             self.add_item(sel)
 
-        if configs:
-            confirm = Button(
+        if self._ctx.configs:
+            confirm: Button[Any] = Button(
                 label="Confirm & Save", style=discord.ButtonStyle.success, row=1
             )
             confirm.callback = self._on_confirm
@@ -342,28 +359,19 @@ class ScheduleDateConfigView(View):
                 break
         else:
             return
-        date_ = self._dates[idx]
-        existing = self._configs.get(idx)
+        date_ = self._ctx.dates[idx]
+        existing = self._ctx.configs.get(idx)
         await interaction.response.edit_message(
             content=f"Set time for **{date_.strftime('%a %Y-%m-%d')}**:",
-            view=ScheduleTimeSelectView(
-                self._store,
-                self._user_id,
-                self._offset,
-                self._dates,
-                self._configs,
-                idx,
-                date_,
-                existing,
-            ),
+            view=ScheduleTimeSelectView(self._ctx, idx, date_, existing),
         )
 
     async def _on_confirm(self, interaction: Interaction) -> None:
         """Generate windows from per-date configs and show preview."""
         windows: list[TimeWindow] = []
-        user_tz = timezone(self._offset)
-        for idx, (st, et) in self._configs.items():
-            d = self._dates[idx]
+        user_tz = timezone(self._ctx.offset)
+        for idx, (st, et) in self._ctx.configs.items():
+            d = self._ctx.dates[idx]
             try:
                 sh, smi = (int(x) for x in st.split(":"))
                 eh, emi = (int(x) for x in et.split(":"))
@@ -390,11 +398,13 @@ class ScheduleDateConfigView(View):
         windows_t = tuple(windows)
 
         preview_items = windows_t[:_PREVIEW_LIMIT]
-        preview = "\n".join(_fmt_range(w, self._offset) for w in preview_items)
+        preview = "\n".join(
+            _fmt_range(w, self._ctx.offset) for w in preview_items
+        )
         if len(windows_t) > _PREVIEW_LIMIT:
             preview += f"\n... and {len(windows_t) - _PREVIEW_LIMIT} more"
 
-        view = ConfirmWindowsView(self._store, self._user_id, windows_t)
+        view = ConfirmWindowsView(self._ctx.store, self._ctx.user_id, windows_t)
         msg = (
             f"Generated {len(windows_t)} windows:\n"
             f"```\n{preview}\n```\nConfirm?"
@@ -405,23 +415,16 @@ class ScheduleDateConfigView(View):
 class ScheduleTimeSelectView(View):
     """Select start/end times for a specific date via hour/minute selects."""
 
-    def __init__(  # noqa: D107, PLR0913
+    def __init__(
         self,
-        store: ScheduleStore,
-        user_id: int,
-        offset: timedelta,
-        dates: list[date],
-        configs: dict[int, tuple[str, str]],
+        ctx: _ScheduleEditContext,
         date_idx: int,
         date_: date,
         existing: tuple[str, str] | None,
     ) -> None:
+        """Init."""
         super().__init__(timeout=300)
-        self._store = store
-        self._user_id = user_id
-        self._offset = offset
-        self._dates = dates
-        self._configs = configs
+        self._ctx = ctx
         self._date_idx = date_idx
         self._date = date_
         self._start_h: int | None = None
@@ -443,7 +446,7 @@ class ScheduleTimeSelectView(View):
             for m in (0, 15, 30, 45)
         ]
 
-        self._sh_sel = Select(
+        self._sh_sel: Select[Any] = Select(
             options=hour_opts, placeholder="Start hour", row=0
         )
         self._sh_sel.callback = self._on_sh
@@ -458,7 +461,7 @@ class ScheduleTimeSelectView(View):
             ]
         self.add_item(self._sh_sel)
 
-        self._sm_sel = Select(
+        self._sm_sel: Select[Any] = Select(
             options=min_opts, placeholder="Start minute", row=1
         )
         self._sm_sel.callback = self._on_sm
@@ -473,7 +476,9 @@ class ScheduleTimeSelectView(View):
             ]
         self.add_item(self._sm_sel)
 
-        self._eh_sel = Select(options=hour_opts, placeholder="End hour", row=2)
+        self._eh_sel: Select[Any] = Select(
+            options=hour_opts, placeholder="End hour", row=2
+        )
         self._eh_sel.callback = self._on_eh
         if existing:
             self._eh_sel.options = [
@@ -486,7 +491,9 @@ class ScheduleTimeSelectView(View):
             ]
         self.add_item(self._eh_sel)
 
-        self._em_sel = Select(options=min_opts, placeholder="End minute", row=3)
+        self._em_sel: Select[Any] = Select(
+            options=min_opts, placeholder="End minute", row=3
+        )
         self._em_sel.callback = self._on_em
         if existing:
             self._em_sel.options = [
@@ -529,26 +536,24 @@ class ScheduleTimeSelectView(View):
 
         if eh < sh or (eh == sh and em <= sm):
             await interaction.response.edit_message(
-                content=f"End time must be after start time. Set time for **{self._date.strftime('%a %Y-%m-%d')}**:",  # noqa: E501
+                content=(
+                    "End time must be after start time."
+                    f" Set time for **{self._date.strftime('%a %Y-%m-%d')}**:"
+                ),
                 view=ScheduleTimeSelectView(
-                    self._store,
-                    self._user_id,
-                    self._offset,
-                    self._dates,
-                    self._configs,
-                    self._date_idx,
-                    self._date,
-                    (st, et),
+                    self._ctx, self._date_idx, self._date, (st, et)
                 ),
             )
             return
 
-        self._configs[self._date_idx] = (st, et)
-        new_view = ScheduleDateConfigView(
-            self._store, self._user_id, self._offset, self._dates, self._configs
-        )
+        new_configs = {**self._ctx.configs, self._date_idx: (st, et)}
+        new_ctx = replace(self._ctx, configs=new_configs)
+        new_view = ScheduleDateConfigView(new_ctx)
         await interaction.response.edit_message(
-            content=f"Time set for **{self._date.strftime('%a %Y-%m-%d')}**: {st} – {et}",  # noqa: E501, RUF001
+            content=(
+                f"Time set for **{self._date.strftime('%a %Y-%m-%d')}**:"
+                f" {st} - {et}"
+            ),
             view=new_view,
         )
 
@@ -571,11 +576,13 @@ class ConfirmWindowsView(View):
     async def _disable_all(self, interaction: Interaction) -> None:
         """Disable all children."""
         for child in self.children:
-            child.disabled = True  # type: ignore[reportAttributeAccessIssue]
+            cast("Any", child).disabled = True
         await interaction.response.edit_message(view=self)
 
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.success)
-    async def confirm(self, interaction: Interaction, _button: Button) -> None:
+    async def confirm(
+        self, interaction: Interaction, _button: Button[Any]
+    ) -> None:
         """Confirm adding windows."""
         self._store.add_entry(self._user_id, self._windows)
         LOGGER.info(
@@ -589,7 +596,9 @@ class ConfirmWindowsView(View):
         )
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger)
-    async def cancel(self, interaction: Interaction, _button: Button) -> None:
+    async def cancel(
+        self, interaction: Interaction, _button: Button[Any]
+    ) -> None:
         """Cancel adding windows."""
         LOGGER.info(
             "User {} cancelled adding {} free time windows",
@@ -615,7 +624,7 @@ class RemoveSelect(View):
         self._store = store
         self._user_id = user_id
         self._offset = offset
-        options = []
+        options: list[discord.SelectOption] = []
         for e in entries[:25]:
             label = (
                 f"{_fmt_short(e.windows[0], offset)} ({len(e.windows)} slots)"
@@ -633,7 +642,7 @@ class RemoveSelect(View):
             options.append(
                 discord.SelectOption(label="No entries available", value="none")
             )
-        select: Select = Select(
+        select: Select[Any] = Select(
             options=options,
             placeholder="Choose an entry to remove",
             custom_id=f"remove_select_{uuid4().hex}",
@@ -680,7 +689,7 @@ class RemoveReasonView(View):
                 label="Other (type reason)", value="__other__"
             ),
         ]
-        sel = Select(
+        sel: Select[Any] = Select(
             options=reasons, placeholder="Select reason (or skip)", row=0
         )
         sel.callback = self._on_select
@@ -752,7 +761,7 @@ class ClearConfirmView(View):
 
     @discord.ui.button(label="Clear All", style=discord.ButtonStyle.danger)
     async def clear_btn(
-        self, interaction: Interaction, _button: Button
+        self, interaction: Interaction, _button: Button[Any]
     ) -> None:
         """Show reason select for clearing."""
         LOGGER.info("User {} initiated clear all entries", interaction.user.id)
@@ -764,12 +773,12 @@ class ClearConfirmView(View):
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel_btn(
-        self, interaction: Interaction, _button: Button
+        self, interaction: Interaction, _button: Button[Any]
     ) -> None:
         """Cancel clearing."""
         LOGGER.info("User {} cancelled clearing entries", interaction.user.id)
         for child in self.children:
-            child.disabled = True  # type: ignore[reportAttributeAccessIssue]
+            cast("Any", child).disabled = True
         await interaction.response.edit_message(content="Cancelled.", view=self)
 
 
@@ -792,7 +801,7 @@ class ClearReasonView(View):
                 label="Other (type reason)", value="__other__"
             ),
         ]
-        sel = Select(
+        sel: Select[Any] = Select(
             options=reasons, placeholder="Select reason (or skip)", row=0
         )
         sel.callback = self._on_select

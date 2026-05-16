@@ -1,5 +1,6 @@
 """Data stores."""
 
+from dataclasses import replace
 from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -216,31 +217,15 @@ class PendingConfirmationStore:
         """Init."""
         self._entries: dict[str, PendingConfirmation] = {}
 
-    def register(  # noqa: PLR0913 — needs all fields to build PendingConfirmation
-        self,
-        event_id: str,
-        action: Literal["add_user", "remove_user", "close"],
-        reason: str | None,
-        target_user_id: int | None,
-        moderator_ids: list[int],
-        timeout_at: datetime | None,
-    ) -> None:
+    def register(self, pending: PendingConfirmation) -> None:
         """Register a pending confirmation."""
-        key = f"{event_id}:{action}"
-        self._entries[key] = PendingConfirmation(
-            event_id=event_id,
-            action=action,
-            reason=reason,
-            target_user_id=target_user_id,
-            votes=dict.fromkeys(moderator_ids, "pending"),
-            timeout_at=timeout_at,
-        )
+        key = f"{pending.event_id}:{pending.action}"
+        self._entries[key] = pending
         LOGGER.debug(
-            "Pending {} for event {} registered (target={}, moderators={})",
-            action,
-            event_id,
-            target_user_id,
-            moderator_ids,
+            "Pending {} for event {} registered (target={})",
+            pending.action,
+            pending.event_id,
+            pending.target_user_id,
         )
 
     def get(
@@ -255,6 +240,40 @@ class PendingConfirmationStore:
         """Remove a pending confirmation."""
         self._entries.pop(f"{event_id}:{action}", None)
         LOGGER.debug("Pending {} for event {} removed", action, event_id)
+
+    def record_vote(
+        self,
+        event_id: str,
+        action: Literal["add_user", "remove_user", "close"],
+        mod_id: int,
+        vote: str,
+    ) -> PendingConfirmation | None:
+        """Record a moderator vote (creates new PendingConfirmation)."""
+        key = f"{event_id}:{action}"
+        pending = self._entries.get(key)
+        if pending is None:
+            return None
+        new_votes = {**pending.votes, mod_id: vote}
+        updated = replace(pending, votes=new_votes)
+        self._entries[key] = updated
+        return updated
+
+    def reject_with_reason(
+        self,
+        event_id: str,
+        action: Literal["add_user", "remove_user", "close"],
+        mod_id: int,
+        reason: str,
+    ) -> PendingConfirmation | None:
+        """Record a rejection with reason (creates new PendingConfirmation)."""
+        key = f"{event_id}:{action}"
+        pending = self._entries.get(key)
+        if pending is None:
+            return None
+        new_votes = {**pending.votes, mod_id: "no"}
+        updated = replace(pending, votes=new_votes, reason=reason)
+        self._entries[key] = updated
+        return updated
 
 
 def get_timezone_store(
