@@ -148,15 +148,36 @@ class EventDaySelect(View):
         self._year = year
         self._month = month
         max_day = calendar.monthrange(year, month)[1]
-        options = [
-            discord.SelectOption(label=str(d), value=str(d))
-            for d in range(1, max_day + 1)
-        ]
-        sel: Select[Any] = Select(
-            options=options, placeholder="Select day", row=0
-        )
-        sel.callback = self._on_select
-        self.add_item(sel)
+        weeks: list[list[int]] = []
+        current_week: list[int] = []
+        for d in range(1, max_day + 1):
+            current_week.append(d)
+            if d == max_day or (
+                calendar.weekday(year, month, d) == calendar.SUNDAY
+            ):
+                weeks.append(current_week)
+                current_week = []
+        for row, week_days in enumerate(weeks):
+            start, end = week_days[0], week_days[-1]
+            swd = calendar.day_abbr[calendar.weekday(year, month, start)]
+            ewd = calendar.day_abbr[calendar.weekday(year, month, end)]
+            chunk = [
+                discord.SelectOption(
+                    label=str(d),
+                    value=str(d),
+                    description=calendar.day_abbr[
+                        calendar.weekday(year, month, d)
+                    ],
+                )
+                for d in week_days
+            ]
+            sel: Select[Any] = Select(
+                options=chunk,
+                placeholder=f"Select day: {swd} {start}-{ewd} {end}",
+                row=row,
+            )
+            sel.callback = self._on_select
+            self.add_item(sel)
 
     async def _on_select(self, interaction: Interaction) -> None:
         val = _first_val(interaction)

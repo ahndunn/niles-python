@@ -157,44 +157,75 @@ class _ScheduleDatePickView(NilesView):
                 discord.SelectOption(label=str(y), value=str(y))
                 for y in range(current, current + 5)
             ]
+            sel: Select[Any] = Select(
+                options=opts, placeholder=f"Select {title}", row=0
+            )
+            sel.callback = self._on_pick
+            self.add_item(sel)
         elif self._step == 2:  # noqa: PLR2004
             title = "Start Month"
             opts = [
                 discord.SelectOption(label=str(m), value=str(m))
                 for m in range(1, 13)
             ]
+            sel = Select(options=opts, placeholder=f"Select {title}", row=0)
+            sel.callback = self._on_pick
+            self.add_item(sel)
         elif self._step == 3:  # noqa: PLR2004
-            title = "Start Day"
-            max_d = calendar.monthrange(self._state.sy, self._state.sm)[1]
-            opts = [
-                discord.SelectOption(label=str(d), value=str(d))
-                for d in range(1, max_d + 1)
-            ]
+            self._make_day_select("Start Day", self._state.sy, self._state.sm)
         elif self._step == 4:  # noqa: PLR2004
             title = "End Year"
             opts = [
                 discord.SelectOption(label=str(y), value=str(y))
                 for y in range(self._state.sy, self._state.sy + 5)
             ]
+            sel = Select(options=opts, placeholder=f"Select {title}", row=0)
+            sel.callback = self._on_pick
+            self.add_item(sel)
         elif self._step == 5:  # noqa: PLR2004
             title = "End Month"
             opts = [
                 discord.SelectOption(label=str(m), value=str(m))
                 for m in range(1, 13)
             ]
+            sel = Select(options=opts, placeholder=f"Select {title}", row=0)
+            sel.callback = self._on_pick
+            self.add_item(sel)
         else:
-            title = "End Day"
-            max_d = calendar.monthrange(self._state.ey, self._state.em)[1]
-            opts = [
-                discord.SelectOption(label=str(d), value=str(d))
-                for d in range(1, max_d + 1)
-            ]
+            self._make_day_select("End Day", self._state.ey, self._state.em)
 
-        sel: Select[Any] = Select(
-            options=opts, placeholder=f"Select {title}", row=0
-        )
-        sel.callback = self._on_pick
-        self.add_item(sel)
+    def _make_day_select(self, title: str, year: int, month: int) -> None:
+        max_d = calendar.monthrange(year, month)[1]
+        weeks: list[list[int]] = []
+        current_week: list[int] = []
+        for d in range(1, max_d + 1):
+            current_week.append(d)
+            if d == max_d or (
+                calendar.weekday(year, month, d) == calendar.SUNDAY
+            ):
+                weeks.append(current_week)
+                current_week = []
+        for row, week_days in enumerate(weeks):
+            start, end = week_days[0], week_days[-1]
+            swd = calendar.day_abbr[calendar.weekday(year, month, start)]
+            ewd = calendar.day_abbr[calendar.weekday(year, month, end)]
+            chunk = [
+                discord.SelectOption(
+                    label=str(d),
+                    value=str(d),
+                    description=calendar.day_abbr[
+                        calendar.weekday(year, month, d)
+                    ],
+                )
+                for d in week_days
+            ]
+            sel: Select[Any] = Select(
+                options=chunk,
+                placeholder=f"{title}: {swd} {start}-{ewd} {end}",
+                row=row,
+            )
+            sel.callback = self._on_pick
+            self.add_item(sel)
 
     async def _on_pick(self, interaction: Interaction) -> None:
         val = _first_val(interaction)
