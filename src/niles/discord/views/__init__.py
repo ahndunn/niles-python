@@ -1,32 +1,33 @@
 """Discord UI components."""
 
 from niles.discord.views.events import (
-    EventRemoveReasonModal as EventRemoveReasonModal,
+    EventRemoveReasonView as EventRemoveReasonView,
 )
 from niles.discord.views.events import (
     EventRoleSelectView as EventRoleSelectView,
 )
 from niles.discord.views.events import EventSelectView as EventSelectView
 from niles.discord.views.events import JoinEventView as JoinEventView
-from niles.discord.views.events import JoinReasonModal as JoinReasonModal
 from niles.discord.views.events import (
     ModConfirmationView as ModConfirmationView,
 )
 from niles.discord.views.events import ModInvitationView as ModInvitationView
-from niles.discord.views.events import NoReasonModal as NoReasonModal
+from niles.discord.views.events import NoReasonView as NoReasonView
 from niles.discord.views.schedule import ClearConfirmView as ClearConfirmView
-from niles.discord.views.schedule import ClearReasonModal as ClearReasonModal
+from niles.discord.views.schedule import ClearReasonView as ClearReasonView
 from niles.discord.views.schedule import (
     ConfirmWindowsView as ConfirmWindowsView,
 )
-from niles.discord.views.schedule import RemoveReasonModal as RemoveReasonModal
+from niles.discord.views.schedule import RemoveReasonView as RemoveReasonView
 from niles.discord.views.schedule import RemoveSelect as RemoveSelect
 from niles.discord.views.schedule import (
     ScheduleDateConfigView as ScheduleDateConfigView,
 )
-from niles.discord.views.schedule import ScheduleDateModal as ScheduleDateModal
 from niles.discord.views.schedule import (
-    ScheduleDateRangeModal as ScheduleDateRangeModal,
+    ScheduleDateRangeView as ScheduleDateRangeView,
+)
+from niles.discord.views.schedule import (
+    ScheduleTimeSelectView as ScheduleTimeSelectView,
 )
 from niles.discord.views.timezone import (
     TimezoneChangePrompt as TimezoneChangePrompt,
@@ -44,21 +45,20 @@ from niles.discord.views.timezone import ensure_timezone as ensure_timezone
 
 __all__ = [
     "ClearConfirmView",
-    "ClearReasonModal",
+    "ClearReasonView",
     "ConfirmWindowsView",
-    "EventRemoveReasonModal",
+    "EventRemoveReasonView",
     "EventRoleSelectView",
     "EventSelectView",
     "JoinEventView",
-    "JoinReasonModal",
     "ModConfirmationView",
     "ModInvitationView",
-    "NoReasonModal",
-    "RemoveReasonModal",
+    "NoReasonView",
+    "RemoveReasonView",
     "RemoveSelect",
     "ScheduleDateConfigView",
-    "ScheduleDateModal",
-    "ScheduleDateRangeModal",
+    "ScheduleDateRangeView",
+    "ScheduleTimeSelectView",
     "TimezoneChangePrompt",
     "TimezoneHourSelect",
     "TimezoneMinuteSelect",

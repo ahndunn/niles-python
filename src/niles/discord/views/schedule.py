@@ -1,6 +1,7 @@
 """Schedule (free time) UI components."""
 # pyright: reportMissingTypeArgument=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownParameterType=false
 
+import calendar
 from datetime import UTC
 from datetime import date
 from datetime import datetime
@@ -12,9 +13,7 @@ from uuid import uuid4
 import discord
 from discord import Interaction
 from discord.ui import Button
-from discord.ui import Modal
 from discord.ui import Select
-from discord.ui import TextInput
 from discord.ui import View
 
 from niles.discord.models import FreeTimeEntry
@@ -23,6 +22,17 @@ from niles.utils.loggers import LOGGER
 
 if TYPE_CHECKING:
     from niles.discord.stores import ScheduleStore
+
+
+def _first_val(interaction: Interaction) -> str | None:
+    """Extract the first selected value from a Select interaction."""
+    for child in interaction.data.get("components", []):  # type: ignore[reportAttributeAccessIssue]
+        for comp in child.get("components", []):
+            vals = comp.get("values", [])
+            if vals:
+                return vals[0]
+    return None
+
 
 _PREVIEW_LIMIT = 20
 
@@ -60,122 +70,226 @@ def _merge_windows(windows: list[TimeWindow]) -> list[TimeWindow]:
     return merged
 
 
-class ScheduleDateRangeModal(Modal):
-    """Modal for picking a date range with year/month/day boxes."""
+class ScheduleDateRangeView(View):
+    """Entry point: start date range selection flow."""
 
-    def __init__(
+    def __init__(  # noqa: D107
         self, store: ScheduleStore, user_id: int, offset: timedelta
     ) -> None:
-        """Init."""
-        super().__init__(title="Add Free Time - Select Dates")
+        super().__init__(timeout=300)
         self._store = store
         self._user_id = user_id
         self._offset = offset
-
         now = datetime.now(UTC).astimezone(timezone(offset))
-
-        self._start_year = TextInput(
-            label="Start Year",
-            placeholder="2024",
-            default=str(now.year),
-            required=True,
-            min_length=4,
-            max_length=4,
-        )
-        self._start_month = TextInput(
-            label="Start Month",
-            placeholder="1-12",
-            default=str(now.month),
-            required=True,
-            min_length=1,
-            max_length=2,
-        )
-        self._start_day = TextInput(
-            label="Start Day",
-            placeholder="1-31",
-            default=str(now.day),
-            required=True,
-            min_length=1,
-            max_length=2,
-        )
-        week_later = now + timedelta(days=7)
-        self._end_year = TextInput(
-            label="End Year",
-            placeholder="2024",
-            default=str(week_later.year),
-            required=True,
-            min_length=4,
-            max_length=4,
-        )
-        self._end_month = TextInput(
-            label="End Month",
-            placeholder="1-12",
-            default=str(week_later.month),
-            required=True,
-            min_length=1,
-            max_length=2,
-        )
-        self._end_day = TextInput(
-            label="End Day",
-            placeholder="1-31",
-            default=str(week_later.day),
-            required=True,
-            min_length=1,
-            max_length=2,
+        sel = Select(
+            options=[
+                discord.SelectOption(label=str(y), value=str(y))
+                for y in range(now.year, now.year + 5)
+            ],
+            placeholder="Select start year",
+            row=0,
         )
 
-        self.add_item(self._start_year)
-        self.add_item(self._start_month)
-        self.add_item(self._start_day)
-        self.add_item(self._end_year)
-        self.add_item(self._end_month)
-        self.add_item(self._end_day)
-
-    async def on_submit(self, interaction: Interaction) -> None:
-        """Handle modal submission."""
-        try:
-            sy = int(self._start_year.value)
-            sm = int(self._start_month.value)
-            sd = int(self._start_day.value)
-            ey = int(self._end_year.value)
-            em = int(self._end_month.value)
-            ed_ = int(self._end_day.value)
-        except ValueError:
-            await interaction.response.send_message(
-                "Invalid date values. Enter numbers.", ephemeral=True
+        async def on_year(interaction: Interaction) -> None:
+            val = _first_val(interaction)
+            if val is None:
+                return
+            nv = _ScheduleDatePickView(
+                self._store, self._user_id, self._offset, 2, start_year=int(val)
             )
+            await interaction.response.edit_message(
+                content=f"Start year: **{val}**. Select start month:", view=nv
+            )
+
+        sel.callback = on_year
+        self.add_item(sel)
+
+
+class _ScheduleDatePickView(View):
+    """Recursive step view for building a start/end date range."""
+
+    def __init__(  # noqa: PLR0913
+        self,
+        store: ScheduleStore,
+        user_id: int,
+        offset: timedelta,
+        step: int,  # 1=start_year, 2=start_month, 3=start_day, 4=end_year, 5=end_month, 6=end_day  # noqa: E501
+        start_year: int = 0,
+        start_month: int = 0,
+        start_day: int = 0,
+        end_year: int = 0,
+        end_month: int = 0,
+    ) -> None:
+        super().__init__(timeout=300)
+        self._store = store
+        self._user_id = user_id
+        self._offset = offset
+        self._step = step
+        self._sy = start_year
+        self._sm = start_month
+        self._sd = start_day
+        self._ey = end_year
+        self._em = end_month
+        self._make_select()
+
+    def _make_select(self) -> None:
+        now = datetime.now(UTC).astimezone(timezone(self._offset))
+
+        if self._step == 1:
+            title = "Start Year"
+            current = now.year
+            opts = [
+                discord.SelectOption(label=str(y), value=str(y))
+                for y in range(current, current + 5)
+            ]
+        elif self._step == 2:  # noqa: PLR2004
+            title = "Start Month"
+            opts = [
+                discord.SelectOption(label=str(m), value=str(m))
+                for m in range(1, 13)
+            ]
+        elif self._step == 3:  # noqa: PLR2004
+            title = "Start Day"
+            max_d = calendar.monthrange(self._sy, self._sm)[1]
+            opts = [
+                discord.SelectOption(label=str(d), value=str(d))
+                for d in range(1, max_d + 1)
+            ]
+        elif self._step == 4:  # noqa: PLR2004
+            title = "End Year"
+            opts = [
+                discord.SelectOption(label=str(y), value=str(y))
+                for y in range(self._sy, self._sy + 5)
+            ]
+        elif self._step == 5:  # noqa: PLR2004
+            title = "End Month"
+            opts = [
+                discord.SelectOption(label=str(m), value=str(m))
+                for m in range(1, 13)
+            ]
+        else:
+            title = "End Day"
+            max_d = calendar.monthrange(self._ey, self._em)[1]
+            opts = [
+                discord.SelectOption(label=str(d), value=str(d))
+                for d in range(1, max_d + 1)
+            ]
+
+        sel = Select(options=opts, placeholder=f"Select {title}", row=0)
+        sel.callback = self._on_pick
+        self.add_item(sel)
+
+    async def _on_pick(self, interaction: Interaction) -> None:
+        val = _first_val(interaction)
+        if val is None:
             return
 
-        try:
-            start = date(sy, sm, sd)
-            end = date(ey, em, ed_)
-        except ValueError:
-            await interaction.response.send_message(
-                "Invalid date. Check year/month/day.", ephemeral=True
+        if self._step == 1:
+            nv = _ScheduleDatePickView(
+                self._store, self._user_id, self._offset, 2, start_year=int(val)
             )
-            return
-
-        if start > end:
-            await interaction.response.send_message(
-                "Start date must be before end date.", ephemeral=True
+            await interaction.response.edit_message(
+                content=f"Start year: **{val}**. Select start month:", view=nv
             )
-            return
+        elif self._step == 2:  # noqa: PLR2004
+            nv = _ScheduleDatePickView(
+                self._store,
+                self._user_id,
+                self._offset,
+                3,
+                start_year=self._sy,
+                start_month=int(val),
+            )
+            await interaction.response.edit_message(
+                content=f"Start month: **{val}**. Select start day:", view=nv
+            )
+        elif self._step == 3:  # noqa: PLR2004
+            nv = _ScheduleDatePickView(
+                self._store,
+                self._user_id,
+                self._offset,
+                4,
+                start_year=self._sy,
+                start_month=self._sm,
+                start_day=int(val),
+            )
+            await interaction.response.edit_message(
+                content=(
+                    f"Start date: **{self._sy}-{self._sm:02d}-{int(val):02d}**."
+                    " Select end year:"
+                ),
+                view=nv,
+            )
+        elif self._step == 4:  # noqa: PLR2004
+            nv = _ScheduleDatePickView(
+                self._store,
+                self._user_id,
+                self._offset,
+                5,
+                start_year=self._sy,
+                start_month=self._sm,
+                start_day=self._sd,
+                end_year=int(val),
+            )
+            await interaction.response.edit_message(
+                content=f"End year: **{val}**. Select end month:", view=nv
+            )
+        elif self._step == 5:  # noqa: PLR2004
+            nv = _ScheduleDatePickView(
+                self._store,
+                self._user_id,
+                self._offset,
+                6,
+                start_year=self._sy,
+                start_month=self._sm,
+                start_day=self._sd,
+                end_year=self._ey,
+                end_month=int(val),
+            )
+            await interaction.response.edit_message(
+                content=f"End month: **{val}**. Select end day:", view=nv
+            )
+        else:
+            end_day = int(val)
+            try:
+                start = date(self._sy, self._sm, self._sd)
+                end = date(self._ey, self._em, end_day)
+            except ValueError:
+                await interaction.response.edit_message(
+                    content="Invalid date. Use `/schedule add` to start over.",
+                    view=None,
+                )
+                return
+            if start > end:
+                await interaction.response.edit_message(
+                    content="Start date must be before end date. Use `/schedule add` to start over.",  # noqa: E501
+                    view=None,
+                )
+                return
 
-        dates: list[date] = []
-        current = start
-        while current <= end:
-            dates.append(current)
-            current += timedelta(days=1)
+            dates: list[date] = []
+            current = start
+            while current <= end:
+                dates.append(current)
+                current += timedelta(days=1)
 
-        configs: dict[int, tuple[str, str]] = {}
-        view = ScheduleDateConfigView(
-            self._store, self._user_id, self._offset, dates, configs
-        )
-        await interaction.response.send_message(
-            f"Configure time ranges for each date ({len(dates)} dates).",
-            view=view,
-            ephemeral=True,
-        )
+            configs: dict[int, tuple[str, str]] = {}
+            view = ScheduleDateConfigView(
+                self._store, self._user_id, self._offset, dates, configs
+            )
+            content = (
+                f"Date range: **{start}** to **{end}** ({len(dates)} days).\n"
+                f"Set time ranges for each date by selecting it below, "
+                f"then click **Confirm & Save** when done."
+            )
+            LOGGER.debug(
+                "User {} selected date range {} to {} ({} days)",
+                self._user_id,
+                start,
+                end,
+                len(dates),
+            )
+            await interaction.response.edit_message(content=content, view=view)
 
 
 class ScheduleDateConfigView(View):
@@ -221,7 +335,7 @@ class ScheduleDateConfigView(View):
             self.add_item(confirm)
 
     async def _on_select_date(self, interaction: Interaction) -> None:
-        """Open a modal to set time for the selected date."""
+        """Open a time select view for the selected date."""
         for child in self.children:
             if isinstance(child, Select) and child.values:
                 idx = int(child.values[0])
@@ -230,17 +344,19 @@ class ScheduleDateConfigView(View):
             return
         date_ = self._dates[idx]
         existing = self._configs.get(idx)
-        modal = ScheduleDateModal(
-            date_,
-            existing,
-            self._configs,
-            idx,
-            self._offset,
-            self._store,
-            self._user_id,
-            self._dates,
+        await interaction.response.edit_message(
+            content=f"Set time for **{date_.strftime('%a %Y-%m-%d')}**:",
+            view=ScheduleTimeSelectView(
+                self._store,
+                self._user_id,
+                self._offset,
+                self._dates,
+                self._configs,
+                idx,
+                date_,
+                existing,
+            ),
         )
-        await interaction.response.send_modal(modal)
 
     async def _on_confirm(self, interaction: Interaction) -> None:
         """Generate windows from per-date configs and show preview."""
@@ -286,68 +402,144 @@ class ScheduleDateConfigView(View):
         await interaction.response.send_message(msg, view=view, ephemeral=True)
 
 
-class ScheduleDateModal(Modal):
-    """Modal for setting time range for a specific date."""
+class ScheduleTimeSelectView(View):
+    """Select start/end times for a specific date via hour/minute selects."""
 
-    def __init__(  # noqa: PLR0913 — modal requires date context and store refs
+    def __init__(  # noqa: D107, PLR0913
         self,
-        date_: date,
-        existing: tuple[str, str] | None,
-        configs: dict[int, tuple[str, str]],
-        date_idx: int,
-        offset: timedelta,
         store: ScheduleStore,
         user_id: int,
+        offset: timedelta,
         dates: list[date],
+        configs: dict[int, tuple[str, str]],
+        date_idx: int,
+        date_: date,
+        existing: tuple[str, str] | None,
     ) -> None:
-        """Init."""
-        super().__init__(title=f"Time for {date_.strftime('%a %Y-%m-%d')}")
-        self._date = date_
-        self._configs = configs
-        self._date_idx = date_idx
-        self._offset = offset
+        super().__init__(timeout=300)
         self._store = store
         self._user_id = user_id
+        self._offset = offset
         self._dates = dates
+        self._configs = configs
+        self._date_idx = date_idx
+        self._date = date_
+        self._start_h: int | None = None
+        self._start_m: int | None = None
+        self._end_h: int | None = None
+        self._end_m: int | None = None
 
-        default_start = existing[0] if existing else "09:00"
-        default_end = existing[1] if existing else "17:00"
+        default_s = existing[0] if existing else "09:00"
+        default_e = existing[1] if existing else "17:00"
+        ds_h, ds_m = (int(x) for x in default_s.split(":"))
+        de_h, de_m = (int(x) for x in default_e.split(":"))
 
-        self._start_time = TextInput(
-            label="Start Time",
-            placeholder="HH:MM (24h)",
-            default=default_start,
-            required=True,
-            min_length=5,
-            max_length=5,
+        hour_opts = [
+            discord.SelectOption(label=f"{h:02d}", value=str(h))
+            for h in range(24)
+        ]
+        min_opts = [
+            discord.SelectOption(label=f"{m:02d}", value=str(m))
+            for m in (0, 15, 30, 45)
+        ]
+
+        self._sh_sel = Select(
+            options=hour_opts, placeholder="Start hour", row=0
         )
-        self._end_time = TextInput(
-            label="End Time",
-            placeholder="HH:MM (24h)",
-            default=default_end,
-            required=True,
-            min_length=5,
-            max_length=5,
-        )
-        self.add_item(self._start_time)
-        self.add_item(self._end_time)
+        self._sh_sel.callback = self._on_sh
+        if existing:
+            self._sh_sel.options = [
+                o
+                if o.value != str(ds_h)
+                else discord.SelectOption(
+                    label=o.label, value=o.value, default=True
+                )
+                for o in self._sh_sel.options
+            ]
+        self.add_item(self._sh_sel)
 
-    async def on_submit(self, interaction: Interaction) -> None:
-        """Handle modal submission."""
-        st = self._start_time.value
-        et = self._end_time.value
-        try:
-            sh, smi = (int(x) for x in st.split(":"))
-            eh, emi = (int(x) for x in et.split(":"))
-        except ValueError:
-            await interaction.response.send_message(
-                "Invalid time format. Use HH:MM.", ephemeral=True
-            )
+        self._sm_sel = Select(
+            options=min_opts, placeholder="Start minute", row=1
+        )
+        self._sm_sel.callback = self._on_sm
+        if existing:
+            self._sm_sel.options = [
+                o
+                if o.value != str(ds_m)
+                else discord.SelectOption(
+                    label=o.label, value=o.value, default=True
+                )
+                for o in self._sm_sel.options
+            ]
+        self.add_item(self._sm_sel)
+
+        self._eh_sel = Select(options=hour_opts, placeholder="End hour", row=2)
+        self._eh_sel.callback = self._on_eh
+        if existing:
+            self._eh_sel.options = [
+                o
+                if o.value != str(de_h)
+                else discord.SelectOption(
+                    label=o.label, value=o.value, default=True
+                )
+                for o in self._eh_sel.options
+            ]
+        self.add_item(self._eh_sel)
+
+        self._em_sel = Select(options=min_opts, placeholder="End minute", row=3)
+        self._em_sel.callback = self._on_em
+        if existing:
+            self._em_sel.options = [
+                o
+                if o.value != str(de_m)
+                else discord.SelectOption(
+                    label=o.label, value=o.value, default=True
+                )
+                for o in self._em_sel.options
+            ]
+        self.add_item(self._em_sel)
+
+    async def _on_sh(self, interaction: Interaction) -> None:
+        self._start_h = int(self._sh_sel.values[0])
+        await self._maybe_save(interaction)
+
+    async def _on_sm(self, interaction: Interaction) -> None:
+        self._start_m = int(self._sm_sel.values[0])
+        await self._maybe_save(interaction)
+
+    async def _on_eh(self, interaction: Interaction) -> None:
+        self._end_h = int(self._eh_sel.values[0])
+        await self._maybe_save(interaction)
+
+    async def _on_em(self, interaction: Interaction) -> None:
+        self._end_m = int(self._em_sel.values[0])
+        await self._maybe_save(interaction)
+
+    async def _maybe_save(self, interaction: Interaction) -> None:
+        sh = self._start_h
+        sm = self._start_m
+        eh = self._end_h
+        em = self._end_m
+        if sh is None or sm is None or eh is None or em is None:
+            await interaction.response.defer()
             return
 
-        if eh < sh or (eh == sh and emi <= smi):
-            await interaction.response.send_message(
-                "End time must be after start time.", ephemeral=True
+        st = f"{sh:02d}:{sm:02d}"
+        et = f"{eh:02d}:{em:02d}"
+
+        if eh < sh or (eh == sh and em <= sm):
+            await interaction.response.edit_message(
+                content=f"End time must be after start time. Set time for **{self._date.strftime('%a %Y-%m-%d')}**:",  # noqa: E501
+                view=ScheduleTimeSelectView(
+                    self._store,
+                    self._user_id,
+                    self._offset,
+                    self._dates,
+                    self._configs,
+                    self._date_idx,
+                    self._date,
+                    (st, et),
+                ),
             )
             return
 
@@ -355,10 +547,9 @@ class ScheduleDateModal(Modal):
         new_view = ScheduleDateConfigView(
             self._store, self._user_id, self._offset, self._dates, self._configs
         )
-        await interaction.response.send_message(
-            f"Time set for {self._date.strftime('%a %Y-%m-%d')}: {st}-{et}",
+        await interaction.response.edit_message(
+            content=f"Time set for **{self._date.strftime('%a %Y-%m-%d')}**: {st} – {et}",  # noqa: E501, RUF001
             view=new_view,
-            ephemeral=True,
         )
 
 
@@ -462,29 +653,74 @@ class RemoveSelect(View):
             interaction.user.id,
             item.values[0],
         )
-        modal = RemoveReasonModal(self._store, item.values[0])
-        await interaction.response.send_modal(modal)
+        view = RemoveReasonView(self._store, item.values[0])
+        await interaction.response.edit_message(
+            content="Remove this free time window? Select a reason or skip:",
+            view=view,
+        )
 
 
-class RemoveReasonModal(Modal):
-    """Optional reason for removing an entry."""
+class RemoveReasonView(View):
+    """Optional reason for removing an entry via select."""
 
-    def __init__(self, store: ScheduleStore, entry_id: str) -> None:
-        """Init."""
-        super().__init__(title="Remove Free Time")
+    def __init__(self, store: ScheduleStore, entry_id: str) -> None:  # noqa: D107
+        super().__init__(timeout=120)
         self._store = store
         self._entry_id = entry_id
-        self._reason: TextInput = TextInput(
-            label="Why? (optional)",
-            placeholder="Reason for removing this free time",
-            required=False,
-            style=discord.TextStyle.paragraph,
+        reasons = [
+            discord.SelectOption(label="No reason needed", value="__none__"),
+            discord.SelectOption(
+                label="Schedule changed", value="schedule changed"
+            ),
+            discord.SelectOption(
+                label="No longer free", value="no longer free"
+            ),
+            discord.SelectOption(label="Wrong entry", value="wrong entry"),
+            discord.SelectOption(
+                label="Other (type reason)", value="__other__"
+            ),
+        ]
+        sel = Select(
+            options=reasons, placeholder="Select reason (or skip)", row=0
         )
-        self.add_item(self._reason)
+        sel.callback = self._on_select
+        self.add_item(sel)
 
-    async def on_submit(self, interaction: Interaction) -> None:
-        """Handle modal submission."""
-        reason = self._reason.value or None
+    async def _on_select(self, interaction: Interaction) -> None:
+        val = _first_val(interaction)
+        if val is None:
+            return
+        if val == "__other__":
+            await interaction.response.edit_message(
+                content="Type your reason below:", view=None
+            )
+
+            def check(msg: discord.Message) -> bool:
+                return (
+                    msg.author == interaction.user
+                    and msg.channel == interaction.channel
+                )
+
+            try:
+                msg = await interaction.client.wait_for(
+                    "message", check=check, timeout=120.0
+                )
+            except TimeoutError:
+                await interaction.followup.send("Timed out.", ephemeral=True)
+                return
+
+            reason = msg.content.strip() or None
+            await interaction.followup.send(f"Reason: {reason}", ephemeral=True)
+        else:
+            reason = None if val == "__none__" else val
+            await interaction.response.edit_message(
+                content=f"Reason: {reason or 'None'}", view=None
+            )
+        await self._do_remove(interaction, reason)
+
+    async def _do_remove(
+        self, interaction: Interaction, reason: str | None
+    ) -> None:
         entry = self._store.remove_entry(self._entry_id, reason)
         if entry is None:
             LOGGER.warning(
@@ -492,9 +728,7 @@ class RemoveReasonModal(Modal):
                 self._entry_id,
                 interaction.user.id,
             )
-            await interaction.response.send_message(
-                "Entry not found.", ephemeral=True
-            )
+            await interaction.followup.send("Entry not found.", ephemeral=True)
             return
         LOGGER.info(
             "User {} removed entry {} (reason={})",
@@ -502,7 +736,7 @@ class RemoveReasonModal(Modal):
             self._entry_id,
             reason,
         )
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "Removed free time window.", ephemeral=True
         )
 
@@ -520,10 +754,13 @@ class ClearConfirmView(View):
     async def clear_btn(
         self, interaction: Interaction, _button: Button
     ) -> None:
-        """Open reason modal for clearing."""
+        """Show reason select for clearing."""
         LOGGER.info("User {} initiated clear all entries", interaction.user.id)
-        modal = ClearReasonModal(self._store, self._user_id)
-        await interaction.response.send_modal(modal)
+        view = ClearReasonView(self._store, self._user_id)
+        await interaction.response.edit_message(
+            content="Clear all future entries? Select a reason or skip:",
+            view=view,
+        )
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel_btn(
@@ -536,25 +773,66 @@ class ClearConfirmView(View):
         await interaction.response.edit_message(content="Cancelled.", view=self)
 
 
-class ClearReasonModal(Modal):
-    """Optional reason for clearing."""
+class ClearReasonView(View):
+    """Optional reason for clearing via select."""
 
-    def __init__(self, store: ScheduleStore, user_id: int) -> None:
-        """Init."""
-        super().__init__(title="Clear All Free Time")
+    def __init__(self, store: ScheduleStore, user_id: int) -> None:  # noqa: D107
+        super().__init__(timeout=120)
         self._store = store
         self._user_id = user_id
-        self._reason: TextInput = TextInput(
-            label="Why? (optional)",
-            placeholder="Reason for clearing all free time",
-            required=False,
-            style=discord.TextStyle.paragraph,
+        reasons = [
+            discord.SelectOption(label="No reason needed", value="__none__"),
+            discord.SelectOption(
+                label="Schedule changed", value="schedule changed"
+            ),
+            discord.SelectOption(
+                label="Not needed anymore", value="not needed anymore"
+            ),
+            discord.SelectOption(
+                label="Other (type reason)", value="__other__"
+            ),
+        ]
+        sel = Select(
+            options=reasons, placeholder="Select reason (or skip)", row=0
         )
-        self.add_item(self._reason)
+        sel.callback = self._on_select
+        self.add_item(sel)
 
-    async def on_submit(self, interaction: Interaction) -> None:
-        """Handle modal submission."""
-        reason = self._reason.value or None
+    async def _on_select(self, interaction: Interaction) -> None:
+        val = _first_val(interaction)
+        if val is None:
+            return
+        if val == "__other__":
+            await interaction.response.edit_message(
+                content="Type your reason below:", view=None
+            )
+
+            def check(msg: discord.Message) -> bool:
+                return (
+                    msg.author == interaction.user
+                    and msg.channel == interaction.channel
+                )
+
+            try:
+                msg = await interaction.client.wait_for(
+                    "message", check=check, timeout=120.0
+                )
+            except TimeoutError:
+                await interaction.followup.send("Timed out.", ephemeral=True)
+                return
+
+            reason = msg.content.strip() or None
+            await interaction.followup.send(f"Reason: {reason}", ephemeral=True)
+        else:
+            reason = None if val == "__none__" else val
+            await interaction.response.edit_message(
+                content=f"Reason: {reason or 'None'}", view=None
+            )
+        await self._do_clear(interaction, reason)
+
+    async def _do_clear(
+        self, interaction: Interaction, reason: str | None
+    ) -> None:
         now = datetime.now(UTC)
         removed = self._store.clear_user_entries(self._user_id, now, reason)
         LOGGER.info(
@@ -563,6 +841,6 @@ class ClearReasonModal(Modal):
             len(removed),
             reason,
         )
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"Cleared {len(removed)} future entries.", ephemeral=True
         )

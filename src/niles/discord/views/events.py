@@ -10,9 +10,7 @@ from typing import Literal
 import discord
 from discord import Interaction
 from discord.ui import Button
-from discord.ui import Modal
 from discord.ui import Select
-from discord.ui import TextInput
 from discord.ui import View
 
 from niles.discord.models import EventData
@@ -258,8 +256,11 @@ class EventSelectView(View):
                     "User is not a moderator.", ephemeral=True
                 )
                 return
-            modal = EventRemoveReasonModal(store, ev, target_id, "mod")
-            await interaction.response.send_modal(modal)
+            view = EventRemoveReasonView(store, ev, target_id, "mod")
+            await interaction.response.edit_message(
+                content="Select a reason for removing this moderator:",
+                view=view,
+            )
         else:
             if interaction.user.id not in ev.moderator_ids:
                 await interaction.response.send_message(
@@ -271,8 +272,10 @@ class EventSelectView(View):
                     "User is not participating.", ephemeral=True
                 )
                 return
-            modal = EventRemoveReasonModal(store, ev, target_id, "user")
-            await interaction.response.send_modal(modal)
+            view = EventRemoveReasonView(store, ev, target_id, "user")
+            await interaction.response.edit_message(
+                content="Select a reason for removing this user:", view=view
+            )
 
     async def _proceed_close(
         self, interaction: Interaction, ev: EventData
@@ -302,33 +305,81 @@ class EventSelectView(View):
         )
 
 
-class EventRemoveReasonModal(Modal):
-    """Modal for providing reason when removing from event."""
+class EventRemoveReasonView(View):
+    """Select a reason when removing from event."""
 
-    def __init__(
+    def __init__(  # noqa: D107
         self,
         store: EventStore,
         event: EventData,
         target_user_id: int,
         role: str,
     ) -> None:
-        """Init."""
-        super().__init__(title=f"Remove {role} from {event.name[:45]}")
+        super().__init__(timeout=120)
         self._store = store
         self._event = event
         self._target_user_id = target_user_id
         self._role = role
-        self._reason = TextInput(
-            label="Reason",
-            placeholder="Why are you removing this user?",
-            required=True,
-            style=discord.TextStyle.paragraph,
-        )
-        self.add_item(self._reason)
+        reasons = [
+            discord.SelectOption(
+                label="Schedule conflict", value="schedule conflict"
+            ),
+            discord.SelectOption(
+                label="No longer available", value="no longer available"
+            ),
+            discord.SelectOption(
+                label="Behavioral issue", value="behavioral issue"
+            ),
+            discord.SelectOption(label="Role change", value="role change"),
+            discord.SelectOption(
+                label="Other (type reason)", value="__other__"
+            ),
+        ]
+        sel = Select(options=reasons, placeholder="Select a reason", row=0)
+        sel.callback = self._on_select
+        self.add_item(sel)
 
-    async def on_submit(self, interaction: Interaction) -> None:
-        """Handle modal submission."""
-        reason = self._reason.value
+    async def _on_select(self, interaction: Interaction) -> None:
+        val = _first_val(interaction)
+        if val is None:
+            return
+        if val == "__other__":
+            await interaction.response.edit_message(
+                content="Type your reason below:", view=None
+            )
+
+            def check(msg: discord.Message) -> bool:
+                return (
+                    msg.author == interaction.user
+                    and msg.channel == interaction.channel
+                )
+
+            try:
+                msg = await interaction.client.wait_for(
+                    "message", check=check, timeout=120.0
+                )
+            except TimeoutError:
+                await interaction.followup.send("Timed out.", ephemeral=True)
+                return
+
+            reason = msg.content.strip()
+            if not reason:
+                await interaction.followup.send(
+                    "Reason cannot be empty.", ephemeral=True
+                )
+                return
+            await interaction.followup.send(f"Reason: {reason}", ephemeral=True)
+        else:
+            reason = val
+            await interaction.response.edit_message(
+                content=f"Reason: {reason}", view=None
+            )
+
+        await self._execute_removal(interaction, reason)
+
+    async def _execute_removal(
+        self, interaction: Interaction, reason: str
+    ) -> None:
         if self._role == "mod":
             new_mods = tuple(
                 mid
@@ -365,7 +416,7 @@ class EventRemoveReasonModal(Modal):
                 interaction.user.id,
                 reason,
             )
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"Removed <@{self._target_user_id}> from moderators.",
                 ephemeral=True,
             )
@@ -380,7 +431,7 @@ class EventRemoveReasonModal(Modal):
                 guild_id=self._event.guild_id,
                 store=interaction.client.pending_confirmations,  # type: ignore[reportAttributeAccessIssue]
             )
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"Proposal to remove <@{self._target_user_id}> "
                 f"from **{self._event.name}**.\n"
                 f"Reason: {reason}\n"
@@ -606,8 +657,10 @@ class ModConfirmationView(View):
                 "You are not a moderator for this event.", ephemeral=True
             )
             return
-        modal = NoReasonModal(self._event_id, self._action, mod_id, self._store)
-        await interaction.response.send_modal(modal)
+        view = NoReasonView(self._event_id, self._action, mod_id, self._store)
+        await interaction.response.edit_message(
+            content="Select a reason for voting no:", view=view
+        )
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel_btn(
@@ -838,53 +891,96 @@ class ModConfirmationView(View):
                 await m_thread.send("Event has been closed.")
 
 
-class NoReasonModal(Modal):
-    """Reason for voting no."""
+class NoReasonView(View):
+    """Select a reason for voting no."""
 
-    def __init__(
+    def __init__(  # noqa: D107
         self,
         event_id: str,
         action: Literal["add_user", "remove_user", "close"],
         mod_id: int,
         store: PendingConfirmationStore,
     ) -> None:
-        """Init."""
-        super().__init__(title="Reason for No")
+        super().__init__(timeout=120)
         self._event_id = event_id
         self._action: Literal["add_user", "remove_user", "close"] = action
         self._mod_id = mod_id
         self._store = store
-        self._reason: TextInput = TextInput(
-            label="Why not?",
-            placeholder="Please provide a reason",
-            required=True,
-            style=discord.TextStyle.paragraph,
-        )
-        self.add_item(self._reason)
+        reasons = [
+            discord.SelectOption(
+                label="Schedule conflict", value="schedule conflict"
+            ),
+            discord.SelectOption(
+                label="Not a good fit", value="not a good fit"
+            ),
+            discord.SelectOption(
+                label="Need more info", value="need more info"
+            ),
+            discord.SelectOption(
+                label="Other (type reason)", value="__other__"
+            ),
+        ]
+        sel = Select(options=reasons, placeholder="Select a reason", row=0)
+        sel.callback = self._on_select
+        self.add_item(sel)
 
-    async def on_submit(self, interaction: Interaction) -> None:
-        """Handle modal submission."""
+    async def _on_select(self, interaction: Interaction) -> None:  # noqa: C901
+        val = _first_val(interaction)
+        if val is None:
+            return
+        if val == "__other__":
+            await interaction.response.edit_message(
+                content="Type your reason below:", view=None
+            )
+
+            def check(msg: discord.Message) -> bool:
+                return (
+                    msg.author == interaction.user
+                    and msg.channel == interaction.channel
+                )
+
+            try:
+                msg = await interaction.client.wait_for(
+                    "message", check=check, timeout=120.0
+                )
+            except TimeoutError:
+                await interaction.followup.send("Timed out.", ephemeral=True)
+                return
+
+            reason = msg.content.strip()
+            if not reason:
+                await interaction.followup.send(
+                    "Reason cannot be empty.", ephemeral=True
+                )
+                return
+            await interaction.followup.send(f"Reason: {reason}", ephemeral=True)
+        else:
+            reason = val
+            await interaction.response.edit_message(
+                content=f"Reason: {reason}", view=None
+            )
+
         pending = self._store.get(self._event_id, self._action)
         if pending is None:
             LOGGER.warning(
-                "NoReasonModal: no pending {} for event {}",
+                "NoReasonView: no pending {} for event {}",
                 self._action,
                 self._event_id,
             )
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Confirmation no longer active.", ephemeral=True
             )
             return
         pending.votes[self._mod_id] = "no"
-        pending.reason = self._reason.value
+        pending.reason = reason
         LOGGER.info(
             "User {} voted no on {} for event {} (reason={})",
             self._mod_id,
             self._action,
             self._event_id,
-            self._reason.value,
+            reason,
         )
-        await interaction.response.send_message("Voted no.", ephemeral=True)
+        await interaction.followup.send("Voted no.", ephemeral=True)
         self._store.remove(self._event_id, self._action)
         store = get_event_store(interaction)
         if store is None:
@@ -939,8 +1035,53 @@ class JoinEventView(View):
             self._target_user_id,
             self._event_id,
         )
-        modal = JoinReasonModal(self._event_id, self._target_user_id)
-        await interaction.response.send_modal(modal)
+        await self._do_join(interaction)
+
+    async def _do_join(self, interaction: Interaction) -> None:
+        store = get_event_store(interaction)
+        if store is None:
+            await interaction.response.send_message(
+                "Store not available.", ephemeral=True
+            )
+            return
+        event = store.get_event(self._event_id)
+        if event is None:
+            await interaction.response.send_message(
+                "Event not found.", ephemeral=True
+            )
+            return
+        new_participants = (*event.participant_ids, self._target_user_id)
+        updated = EventData(
+            id=event.id,
+            name=event.name,
+            creator_id=event.creator_id,
+            guild_id=event.guild_id,
+            window=event.window,
+            participant_ids=new_participants,
+            moderator_ids=event.moderator_ids,
+            participant_thread_id=event.participant_thread_id,
+            moderator_thread_id=event.moderator_thread_id,
+            is_closed=event.is_closed,
+            created_at=event.created_at,
+        )
+        store.update_event(updated)
+        LOGGER.info(
+            "User {} joined event {}", self._target_user_id, self._event_id
+        )
+        await self._disable_all(interaction)
+        await interaction.edit_original_response(
+            content="You've joined the event!"
+        )
+        if event.participant_thread_id and interaction.guild:
+            p_thread = interaction.guild.get_thread(event.participant_thread_id)
+            if p_thread is not None:
+                await p_thread.add_user(interaction.user)
+        if event.moderator_thread_id and interaction.guild:
+            mod_thread = interaction.guild.get_thread(event.moderator_thread_id)
+            if mod_thread is not None:
+                await mod_thread.send(
+                    f"<@{self._target_user_id}> has joined the event."
+                )
 
     @discord.ui.button(label="Decline", style=discord.ButtonStyle.danger)
     async def decline_btn(
@@ -977,75 +1118,11 @@ class JoinEventView(View):
                 )
 
 
-class JoinReasonModal(Modal):
-    """Optional reason for joining an event."""
-
-    def __init__(self, event_id: str, target_user_id: int) -> None:
-        """Init."""
-        super().__init__(title="Join Event")
-        self._event_id = event_id
-        self._target_user_id = target_user_id
-        self._reason: TextInput = TextInput(
-            label="Why joining? (optional)",
-            placeholder="You can state why you're joining",
-            required=False,
-            style=discord.TextStyle.paragraph,
-        )
-        self.add_item(self._reason)
-
-    async def on_submit(self, interaction: Interaction) -> None:
-        """Handle modal submission."""
-        store = get_event_store(interaction)
-        if store is None:
-            LOGGER.error(
-                "EventStore unavailable in JoinReasonModal for event {}",
-                self._event_id,
-            )
-            return
-        event = store.get_event(self._event_id)
-        if event is None:
-            LOGGER.warning(
-                "Event {} not found in JoinReasonModal", self._event_id
-            )
-            await interaction.response.send_message(
-                "Event not found.", ephemeral=True
-            )
-            return
-        new_participants = (*event.participant_ids, self._target_user_id)
-        updated = EventData(
-            id=event.id,
-            name=event.name,
-            creator_id=event.creator_id,
-            guild_id=event.guild_id,
-            window=event.window,
-            participant_ids=new_participants,
-            moderator_ids=event.moderator_ids,
-            participant_thread_id=event.participant_thread_id,
-            moderator_thread_id=event.moderator_thread_id,
-            is_closed=event.is_closed,
-            created_at=event.created_at,
-        )
-        store.update_event(updated)
-        reason_text = (
-            f"\nReason: {self._reason.value}" if self._reason.value else ""
-        )
-        LOGGER.info(
-            "User {} joined event {} (reason={})",
-            self._target_user_id,
-            self._event_id,
-            self._reason.value or None,
-        )
-        await interaction.response.edit_message(
-            content=f"You've joined the event!{reason_text}", view=None
-        )
-        if event.participant_thread_id and interaction.guild:
-            p_thread = interaction.guild.get_thread(event.participant_thread_id)
-            if p_thread is not None:
-                await p_thread.add_user(interaction.user)
-        if event.moderator_thread_id and interaction.guild:
-            mod_thread = interaction.guild.get_thread(event.moderator_thread_id)
-            if mod_thread is not None:
-                await mod_thread.send(
-                    f"<@{self._target_user_id}> has joined the event."
-                    f"{reason_text}"
-                )
+def _first_val(interaction: Interaction) -> str | None:
+    """Extract the first selected value from a Select interaction."""
+    for child in interaction.data.get("components", []):  # type: ignore[reportAttributeAccessIssue]
+        for comp in child.get("components", []):
+            vals = comp.get("values", [])
+            if vals:
+                return vals[0]
+    return None

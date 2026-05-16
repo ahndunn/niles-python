@@ -12,7 +12,7 @@ from niles.discord.stores import get_schedule_store
 from niles.discord.stores import get_timezone_store
 from niles.discord.views import ClearConfirmView
 from niles.discord.views import RemoveSelect
-from niles.discord.views import ScheduleDateRangeModal
+from niles.discord.views import ScheduleDateRangeView
 from niles.discord.views import ensure_timezone
 from niles.utils.datetime import parse_offset
 from niles.utils.loggers import LOGGER
@@ -44,8 +44,11 @@ async def schedule_add(interaction: Interaction) -> None:
             "Store not available.", ephemeral=True
         )
         return
-    modal = ScheduleDateRangeModal(store, interaction.user.id, offset)
-    await interaction.response.send_modal(modal)
+    await interaction.response.send_message(
+        "**Add Free Time — Select Dates**\nChoose the start year:",
+        view=ScheduleDateRangeView(store, interaction.user.id, offset),
+        ephemeral=True,
+    )
 
 
 @schedule_group.command(name="remove", description="Remove a free time window")
