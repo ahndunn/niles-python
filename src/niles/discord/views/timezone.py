@@ -1,5 +1,7 @@
 """Timezone setup UI components."""
 
+from collections.abc import Awaitable
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 from typing import ClassVar
@@ -14,8 +16,12 @@ from niles.discord.stores import get_timezone_store
 from niles.utils.datetime import parse_offset
 from niles.utils.loggers import LOGGER
 
+type CommandContinuation = Callable[[Interaction, timedelta], Awaitable[None]]
 
-async def ensure_timezone(interaction: Interaction) -> timedelta | None:
+
+async def ensure_timezone(
+    interaction: Interaction, on_complete: CommandContinuation | None = None
+) -> timedelta | None:
     """Check user has a timezone set; send setup view if not.
 
     Returns the user's offset as a ``timedelta``, or ``None`` if the view was
@@ -31,7 +37,7 @@ async def ensure_timezone(interaction: Interaction) -> timedelta | None:
             return parsed
         store.set(interaction.user.id, "UTC+0")
         return timedelta(0)
-    view = TimezoneChangePrompt()
+    view = TimezoneChangePrompt(on_complete=on_complete)
     await interaction.response.send_message(
         "Your timezone is set to **UTC+0** by default. "
         "Would you like to change it?",
@@ -44,9 +50,10 @@ async def ensure_timezone(interaction: Interaction) -> timedelta | None:
 class TimezoneChangePrompt(View):
     """Step 1: Ask if user wants to change from default UTC+0."""
 
-    def __init__(self) -> None:
+    def __init__(self, on_complete: CommandContinuation | None = None) -> None:
         """Init."""
         super().__init__(timeout=300)
+        self._on_complete = on_complete
 
     @discord.ui.button(
         label="Yes, change timezone", style=discord.ButtonStyle.primary
@@ -55,7 +62,7 @@ class TimezoneChangePrompt(View):
         self, interaction: Interaction, _button: Button[Any]
     ) -> None:
         """User wants to change timezone."""
-        view = TimezoneSignSelect()
+        view = TimezoneSignSelect(on_complete=self._on_complete)
         await interaction.response.edit_message(
             content="Is your timezone positive or negative (relative to UTC)?",
             view=view,
@@ -76,15 +83,18 @@ class TimezoneChangePrompt(View):
         await interaction.response.edit_message(
             content="✅ Timezone set to **UTC+0**.", view=None
         )
+        if self._on_complete is not None:
+            await self._on_complete(interaction, timedelta(0))
         self.stop()
 
 
 class TimezoneSignSelect(View):
     """Step 2: Choose positive or negative offset."""
 
-    def __init__(self) -> None:
+    def __init__(self, on_complete: CommandContinuation | None = None) -> None:
         """Init."""
         super().__init__(timeout=300)
+        self._on_complete = on_complete
 
     @discord.ui.button(
         label="Positive (UTC+0 to UTC+14)", style=discord.ButtonStyle.success
@@ -93,7 +103,7 @@ class TimezoneSignSelect(View):
         self, interaction: Interaction, _button: Button[Any]
     ) -> None:
         """User chose positive offset."""
-        view = TimezoneHourSelect("+")
+        view = TimezoneHourSelect("+", on_complete=self._on_complete)
         await interaction.response.edit_message(
             content="Select your UTC hour offset:", view=view
         )
@@ -106,7 +116,7 @@ class TimezoneSignSelect(View):
         self, interaction: Interaction, _button: Button[Any]
     ) -> None:
         """User chose negative offset."""
-        view = TimezoneHourSelect("-")
+        view = TimezoneHourSelect("-", on_complete=self._on_complete)
         await interaction.response.edit_message(
             content="Select your UTC hour offset:", view=view
         )
@@ -130,10 +140,13 @@ class TimezoneHourSelect(View):
         },
     }
 
-    def __init__(self, sign: str) -> None:
+    def __init__(
+        self, sign: str, on_complete: CommandContinuation | None = None
+    ) -> None:
         """Init."""
         super().__init__(timeout=300)
         self._sign = sign
+        self._on_complete = on_complete
 
         hours = list(range(15)) if sign == "+" else list(range(1, 13))
 
@@ -164,8 +177,14 @@ class TimezoneHourSelect(View):
             await interaction.response.edit_message(
                 content=f"✅ Timezone set to **{offset_str}**.", view=None
             )
+            if self._on_complete is not None:
+                offset = parse_offset(offset_str)
+                if offset is not None:
+                    await self._on_complete(interaction, offset)
         else:
-            view = TimezoneMinuteSelect(sign, hour, special)
+            view = TimezoneMinuteSelect(
+                sign, hour, special, on_complete=self._on_complete
+            )
             await interaction.response.edit_message(
                 content="Select the minute offset:", view=view
             )
@@ -176,12 +195,17 @@ class TimezoneMinuteSelect(View):
     """Step 4: Select the minute offset for special hours."""
 
     def __init__(
-        self, sign: str, hour: int, minute_options: tuple[int, ...]
+        self,
+        sign: str,
+        hour: int,
+        minute_options: tuple[int, ...],
+        on_complete: CommandContinuation | None = None,
     ) -> None:
         """Init."""
         super().__init__(timeout=300)
         self._sign = sign
         self._hour = hour
+        self._on_complete = on_complete
 
         options = [
             discord.SelectOption(
@@ -218,4 +242,8 @@ class TimezoneMinuteSelect(View):
         await interaction.response.edit_message(
             content=f"✅ Timezone set to **{offset_str}**.", view=None
         )
+        if self._on_complete is not None:
+            offset = parse_offset(offset_str)
+            if offset is not None:
+                await self._on_complete(interaction, offset)
         self.stop()

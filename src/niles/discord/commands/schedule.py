@@ -30,9 +30,17 @@ schedule_group = app_commands.Group(
 @schedule_group.command(name="add", description="Add new free time windows")
 async def schedule_add(interaction: Interaction) -> None:
     """Add new free time windows."""
-    offset = await ensure_timezone(interaction)
+    offset = await ensure_timezone(interaction, on_complete=_schedule_add_impl)
     if offset is None:
         return
+    await interaction.response.defer(ephemeral=True)
+    await _schedule_add_impl(interaction, offset)
+
+
+async def _schedule_add_impl(
+    interaction: Interaction, offset: timedelta
+) -> None:
+    """Execute schedule add logic (shared by direct and continuation paths)."""
     LOGGER.info("User {} used /schedule add", interaction.user.id)
     store = get_schedule_store(interaction)
     if store is None:
@@ -40,11 +48,9 @@ async def schedule_add(interaction: Interaction) -> None:
             "ScheduleStore unavailable for user {} in /schedule add",
             interaction.user.id,
         )
-        await interaction.response.send_message(
-            "Store not available.", ephemeral=True
-        )
+        await interaction.followup.send("Store not available.", ephemeral=True)
         return
-    await interaction.response.send_message(
+    await interaction.followup.send(
         "**Add Free Time — Select Dates**\nChoose the start year:",
         view=ScheduleDateRangeView(store, interaction.user.id, offset),
         ephemeral=True,

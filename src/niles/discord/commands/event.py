@@ -514,17 +514,22 @@ def _first_val(interaction: Interaction) -> str | None:
 )
 async def event_create(interaction: Interaction) -> None:
     """Create a new event."""
-    offset = await ensure_timezone(interaction)
+
+    async def _continue(interaction: Interaction, offset: timedelta) -> None:
+        LOGGER.info("User {} used /event create", interaction.user.id)
+        await interaction.followup.send(
+            "**Let's create an event!** Follow the steps below.\n"
+            "**Step 1/7:** What's the event name?\n"
+            "Click **Start** below, then type the name in chat.",
+            view=EventNameStep(offset),
+            ephemeral=True,
+        )
+
+    offset = await ensure_timezone(interaction, on_complete=_continue)
     if offset is None:
         return
-    LOGGER.info("User {} used /event create", interaction.user.id)
-    await interaction.response.send_message(
-        "**Let's create an event!** Follow the steps below.\n"
-        "**Step 1/7:** What's the event name?\n"
-        "Click **Start** below, then type the name in chat.",
-        view=EventNameStep(offset),
-        ephemeral=True,
-    )
+    await interaction.response.defer(ephemeral=True)
+    await _continue(interaction, offset)
 
 
 @event_group.command(
