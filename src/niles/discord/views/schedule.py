@@ -164,15 +164,28 @@ class _ScheduleDatePickView(NilesView):
             self.add_item(sel)
         elif self._step == 2:  # noqa: PLR2004
             title = "Start Month"
-            opts = [
-                discord.SelectOption(label=str(m), value=str(m))
-                for m in range(1, 13)
-            ]
+            if self._state.sy == now.year:
+                opts = [
+                    discord.SelectOption(label=str(m), value=str(m))
+                    for m in range(now.month, 13)
+                ]
+            else:
+                opts = [
+                    discord.SelectOption(label=str(m), value=str(m))
+                    for m in range(1, 13)
+                ]
             sel = Select(options=opts, placeholder=f"Select {title}", row=0)
             sel.callback = self._on_pick
             self.add_item(sel)
         elif self._step == 3:  # noqa: PLR2004
-            self._make_day_select("Start Day", self._state.sy, self._state.sm)
+            min_day = (
+                now.day
+                if self._state.sy == now.year and self._state.sm == now.month
+                else 1
+            )
+            self._make_day_select(
+                "Start Day", self._state.sy, self._state.sm, min_day=min_day
+            )
         elif self._step == 4:  # noqa: PLR2004
             title = "End Year"
             opts = [
@@ -184,17 +197,33 @@ class _ScheduleDatePickView(NilesView):
             self.add_item(sel)
         elif self._step == 5:  # noqa: PLR2004
             title = "End Month"
-            opts = [
-                discord.SelectOption(label=str(m), value=str(m))
-                for m in range(1, 13)
-            ]
+            if self._state.ey == self._state.sy:
+                opts = [
+                    discord.SelectOption(label=str(m), value=str(m))
+                    for m in range(self._state.sm, 13)
+                ]
+            else:
+                opts = [
+                    discord.SelectOption(label=str(m), value=str(m))
+                    for m in range(1, 13)
+                ]
             sel = Select(options=opts, placeholder=f"Select {title}", row=0)
             sel.callback = self._on_pick
             self.add_item(sel)
         else:
-            self._make_day_select("End Day", self._state.ey, self._state.em)
+            min_day = (
+                self._state.sd
+                if self._state.ey == self._state.sy
+                and self._state.em == self._state.sm
+                else 1
+            )
+            self._make_day_select(
+                "End Day", self._state.ey, self._state.em, min_day=min_day
+            )
 
-    def _make_day_select(self, title: str, year: int, month: int) -> None:
+    def _make_day_select(
+        self, title: str, year: int, month: int, min_day: int = 1
+    ) -> None:
         max_d = calendar.monthrange(year, month)[1]
         weeks: list[list[int]] = []
         current_week: list[int] = []
@@ -218,7 +247,10 @@ class _ScheduleDatePickView(NilesView):
                     ],
                 )
                 for d in week_days
+                if d >= min_day
             ]
+            if not chunk:
+                continue
             sel: Select[Any] = Select(
                 options=chunk,
                 placeholder=f"{title}: {swd} {start}-{ewd} {end}",
