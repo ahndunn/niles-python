@@ -742,7 +742,7 @@ class ScheduleTimeFlowView(NilesView):
     def _add_back_button(self) -> None:
         last_row = self._last_content_row()
         if last_row < 4:  # noqa: PLR2004
-            back = Button(
+            back = Button[Any](
                 label="Back",
                 style=discord.ButtonStyle.secondary,
                 row=last_row + 1,
@@ -751,13 +751,15 @@ class ScheduleTimeFlowView(NilesView):
             self.add_item(back)
 
     def _add_cancel_button(self) -> None:
-        cancel = Button(label="Cancel", style=discord.ButtonStyle.danger, row=4)
+        cancel = Button[Any](
+            label="Cancel", style=discord.ButtonStyle.danger, row=4
+        )
         cancel.callback = self._on_cancel
         self.add_item(cancel)
 
     def _build_start_hour_buttons(self) -> None:
         for h24 in range(24):
-            button = Button(
+            button = Button[Any](
                 label=self._fmt_hour(h24),
                 style=discord.ButtonStyle.secondary,
                 row=h24 // 5,
@@ -805,7 +807,7 @@ class ScheduleTimeFlowView(NilesView):
         for m in (0, 15, 30, 45):
             if m <= min_val and not is_start and self._end_h == self._start_h:
                 continue
-            button = Button(
+            button = Button[Any](
                 label=f"{m:02d}", style=discord.ButtonStyle.secondary, row=0
             )
             button.callback = self._make_min_callback(m, is_start=is_start)
@@ -855,7 +857,7 @@ class ScheduleTimeFlowView(NilesView):
         )
         count = max(24 - min_h24, 0)
         if count == 0:
-            button = Button(
+            button = Button[Any](
                 label="No valid end hour - Go Back",
                 style=discord.ButtonStyle.danger,
                 row=0,
@@ -865,7 +867,7 @@ class ScheduleTimeFlowView(NilesView):
             return
 
         for i, h24 in enumerate(range(min_h24, 24)):
-            button = Button(
+            button = Button[Any](
                 label=self._fmt_hour(h24),
                 style=discord.ButtonStyle.secondary,
                 row=i // 5,
