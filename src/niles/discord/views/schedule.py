@@ -426,22 +426,12 @@ class ScheduleDateConfigView(NilesView):
         else:
             return
         date_ = self._ctx.dates[idx]
-        existing = self._ctx.configs.get(idx)
-        known = (
-            (
-                (
-                    int(existing[0].split(":")[0]),
-                    int(existing[0].split(":")[1]),
-                    int(existing[1].split(":")[0]),
-                    int(existing[1].split(":")[1]),
-                )
-            )
-            if existing
-            else None
-        )
         await interaction.response.edit_message(
-            content=f"Set time for **{date_.strftime('%a %Y-%m-%d')}**:",
-            view=ScheduleTimeSelectView(self._ctx, idx, date_, known),
+            content=(
+                f"Set time for **{date_.strftime('%a %Y-%m-%d')}**."
+                f" Choose start hour:"
+            ),
+            view=ScheduleTimeFlowView(self._ctx, idx, date_, step=0),
         )
 
     async def _on_confirm(self, interaction: Interaction) -> None:
@@ -675,6 +665,258 @@ class ScheduleTimeSelectView(NilesView):
             ),
             view=new_view,
         )
+
+
+class ScheduleTimeFlowView(NilesView):
+    """Step-by-step time selection with 12h AM/PM buttons."""
+
+    def __init__(  # noqa: PLR0913
+        self,
+        ctx: _ScheduleEditContext,
+        date_idx: int,
+        date_: date,
+        step: int = 0,
+        start_h: int | None = None,
+        start_m: int | None = None,
+        end_h: int | None = None,
+        end_m: int | None = None,
+    ) -> None:
+        """Init."""
+        super().__init__(timeout=300)
+        self._ctx = ctx
+        self._date_idx = date_idx
+        self._date = date_
+        self._step = step
+        self._start_h = start_h
+        self._start_m = start_m
+        self._end_h = end_h
+        self._end_m = end_m
+
+        if step == 0:
+            self._build_start_hour_buttons()
+        elif step == 1:
+            self._build_minute_buttons(is_start=True)
+        elif step == 2:  # noqa: PLR2004
+            self._build_end_hour_buttons()
+        elif step == 3:  # noqa: PLR2004
+            self._build_minute_buttons(is_start=False)
+
+        if 0 < step < 4:  # noqa: PLR2004
+            self._add_back_button()
+        self._add_cancel_button()
+
+    @staticmethod
+    def _to_12h(h24: int) -> tuple[int, str]:
+        if h24 == 0:
+            return (12, "AM")
+        if h24 < 12:  # noqa: PLR2004
+            return (h24, "AM")
+        if h24 == 12:  # noqa: PLR2004
+            return (12, "PM")
+        return (h24 - 12, "PM")
+
+    @staticmethod
+    def _fmt_hour(h24: int) -> str:
+        h12, ampm = ScheduleTimeFlowView._to_12h(h24)
+        return f"{h12}{ampm}"
+
+    @staticmethod
+    def _fmt_time(h: int, m: int) -> str:
+        return f"{ScheduleTimeFlowView._fmt_hour(h)}:{m:02d}"
+
+    def _last_content_row(self) -> int:
+        if self._step == 0:
+            return 4
+        if self._step == 1:
+            return 0
+        if self._step == 2:  # noqa: PLR2004
+            min_h = cast("int", self._start_h) + (
+                1 if self._start_m is not None and self._start_m >= 45 else 0  # noqa: PLR2004
+            )
+            count = max(24 - min_h, 0)
+            if count == 0:
+                return 0
+            return (count - 1) // 5
+        return 0
+
+    def _add_back_button(self) -> None:
+        last_row = self._last_content_row()
+        if last_row < 4:  # noqa: PLR2004
+            back = Button(
+                label="Back",
+                style=discord.ButtonStyle.secondary,
+                row=last_row + 1,
+            )
+            back.callback = self._on_back
+            self.add_item(back)
+
+    def _add_cancel_button(self) -> None:
+        cancel = Button(label="Cancel", style=discord.ButtonStyle.danger, row=4)
+        cancel.callback = self._on_cancel
+        self.add_item(cancel)
+
+    def _build_start_hour_buttons(self) -> None:
+        for h24 in range(24):
+            button = Button(
+                label=self._fmt_hour(h24),
+                style=discord.ButtonStyle.secondary,
+                row=h24 // 5,
+            )
+            button.callback = self._make_hour_callback(h24, is_start=True)
+            self.add_item(button)
+
+    def _make_hour_callback(self, h24: int, *, is_start: bool):  # noqa: ANN202
+        async def callback(interaction: Interaction) -> None:
+            if is_start:
+                nv = ScheduleTimeFlowView(
+                    self._ctx, self._date_idx, self._date, step=1, start_h=h24
+                )
+                content = (
+                    f"Start hour: **{self._fmt_hour(h24)}**. "
+                    f"Choose start minute:"
+                )
+            else:
+                nv = ScheduleTimeFlowView(
+                    self._ctx,
+                    self._date_idx,
+                    self._date,
+                    step=3,
+                    start_h=self._start_h,
+                    start_m=self._start_m,
+                    end_h=h24,
+                )
+                content = (
+                    f"End hour: **{self._fmt_hour(h24)}**. Choose end minute:"
+                )
+            await interaction.response.edit_message(content=content, view=nv)
+
+        return callback
+
+    def _build_minute_buttons(self, *, is_start: bool) -> None:
+        min_val: int = (
+            -1
+            if is_start
+            else (
+                cast("int", self._start_m)
+                if self._end_h == self._start_h
+                else -1
+            )
+        )
+        for m in (0, 15, 30, 45):
+            if m <= min_val and not is_start and self._end_h == self._start_h:
+                continue
+            button = Button(
+                label=f"{m:02d}", style=discord.ButtonStyle.secondary, row=0
+            )
+            button.callback = self._make_min_callback(m, is_start=is_start)
+            self.add_item(button)
+
+    def _make_min_callback(self, m: int, *, is_start: bool):  # noqa: ANN202
+        async def callback(interaction: Interaction) -> None:
+            if is_start:
+                nv = ScheduleTimeFlowView(
+                    self._ctx,
+                    self._date_idx,
+                    self._date,
+                    step=2,
+                    start_h=self._start_h,
+                    start_m=m,
+                )
+                content = (
+                    f"Start time: "
+                    f"**{self._fmt_time(cast('int', self._start_h), m)}**. "
+                    f"Choose end hour:"
+                )
+                await interaction.response.edit_message(
+                    content=content, view=nv
+                )
+            else:
+                await self._on_end_minute(interaction, m)
+
+        return callback
+
+    async def _on_end_minute(self, interaction: Interaction, m: int) -> None:
+        st = f"{self._start_h:02d}:{self._start_m:02d}"
+        et = f"{self._end_h:02d}:{m:02d}"
+        new_configs = {**self._ctx.configs, self._date_idx: (st, et)}
+        new_ctx = replace(self._ctx, configs=new_configs)
+        new_view = ScheduleDateConfigView(new_ctx)
+        await interaction.response.edit_message(
+            content=(
+                f"Time set for **{self._date.strftime('%a %Y-%m-%d')}**:"
+                f" {st} - {et}"
+            ),
+            view=new_view,
+        )
+
+    def _build_end_hour_buttons(self) -> None:
+        min_h24 = cast("int", self._start_h) + (
+            1 if self._start_m is not None and self._start_m >= 45 else 0  # noqa: PLR2004
+        )
+        count = max(24 - min_h24, 0)
+        if count == 0:
+            button = Button(
+                label="No valid end hour - Go Back",
+                style=discord.ButtonStyle.danger,
+                row=0,
+            )
+            button.callback = self._on_back
+            self.add_item(button)
+            return
+
+        for i, h24 in enumerate(range(min_h24, 24)):
+            button = Button(
+                label=self._fmt_hour(h24),
+                style=discord.ButtonStyle.secondary,
+                row=i // 5,
+            )
+            button.callback = self._make_hour_callback(h24, is_start=False)
+            self.add_item(button)
+
+    async def _on_back(self, interaction: Interaction) -> None:
+        if self._step == 1:
+            nv = ScheduleTimeFlowView(
+                self._ctx, self._date_idx, self._date, step=0
+            )
+            content = "Choose start hour:"
+        elif self._step == 2:  # noqa: PLR2004
+            nv = ScheduleTimeFlowView(
+                self._ctx,
+                self._date_idx,
+                self._date,
+                step=1,
+                start_h=self._start_h,
+            )
+            content = (
+                f"Start hour: "
+                f"**{self._fmt_hour(cast('int', self._start_h))}**. "
+                f"Choose start minute:"
+            )
+        elif self._step == 3:  # noqa: PLR2004
+            nv = ScheduleTimeFlowView(
+                self._ctx,
+                self._date_idx,
+                self._date,
+                step=2,
+                start_h=self._start_h,
+                start_m=self._start_m,
+            )
+            sh = cast("int", self._start_h)
+            sm = cast("int", self._start_m)
+            content = (
+                f"Start time: **{self._fmt_time(sh, sm)}**. Choose end hour:"
+            )
+        else:
+            return
+        await interaction.response.edit_message(content=content, view=nv)
+
+    async def _on_cancel(self, interaction: Interaction) -> None:
+        new_view = ScheduleDateConfigView(self._ctx)
+        content = (
+            "Set time for each date by selecting it below, "
+            "then click **Confirm & Save** when done:"
+        )
+        await interaction.response.edit_message(content=content, view=new_view)
 
 
 class ConfirmWindowsView(NilesView):
