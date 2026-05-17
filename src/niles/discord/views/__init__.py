@@ -31,17 +31,9 @@ from niles.discord.views.schedule import (
     ScheduleTimeSelectView as ScheduleTimeSelectView,
 )
 from niles.discord.views.timezone import (
-    TimezoneChangePrompt as TimezoneChangePrompt,
+    TimezonePickerView as TimezonePickerView,
 )
-from niles.discord.views.timezone import (
-    TimezoneHourSelect as TimezoneHourSelect,
-)
-from niles.discord.views.timezone import (
-    TimezoneMinuteSelect as TimezoneMinuteSelect,
-)
-from niles.discord.views.timezone import (
-    TimezoneSignSelect as TimezoneSignSelect,
-)
+from niles.discord.views.timezone import TimezoneSetupView as TimezoneSetupView
 from niles.discord.views.timezone import ensure_timezone as ensure_timezone
 
 __all__ = [
@@ -61,9 +53,7 @@ __all__ = [
     "ScheduleDateConfigView",
     "ScheduleDateRangeView",
     "ScheduleTimeSelectView",
-    "TimezoneChangePrompt",
-    "TimezoneHourSelect",
-    "TimezoneMinuteSelect",
-    "TimezoneSignSelect",
+    "TimezonePickerView",
+    "TimezoneSetupView",
     "ensure_timezone",
 ]

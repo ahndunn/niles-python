@@ -12,44 +12,44 @@ _MAX_OFFSET_HOURS = 14
 _MAX_OFFSET_MINUTES = 59
 
 _LOCALE_TO_OFFSET: dict[str, str] = {
-    "ja": "UTC+9",
-    "ko": "UTC+9",
-    "zh-CN": "UTC+8",
-    "zh-TW": "UTC+8",
-    "de": "UTC+1",
-    "fr": "UTC+1",
-    "es-ES": "UTC+1",
-    "it": "UTC+1",
-    "pt-BR": "UTC-3",
-    "ru": "UTC+3",
-    "nl": "UTC+1",
-    "pl": "UTC+1",
-    "tr": "UTC+3",
-    "da": "UTC+1",
-    "fi": "UTC+2",
-    "nb-NO": "UTC+1",
-    "sv-SE": "UTC+1",
-    "cs": "UTC+1",
-    "hu": "UTC+1",
-    "ro": "UTC+2",
-    "uk": "UTC+2",
-    "bg": "UTC+2",
-    "el": "UTC+2",
-    "th": "UTC+7",
-    "vi": "UTC+7",
-    "id": "UTC+7",
-    "ms": "UTC+8",
-    "hi": "UTC+5:30",
-    "en-GB": "UTC+0",
-    "pt-PT": "UTC+0",
+    "ja": "UTC+09",
+    "ko": "UTC+09",
+    "zh-CN": "UTC+08",
+    "zh-TW": "UTC+08",
+    "de": "UTC+01",
+    "fr": "UTC+01",
+    "es-ES": "UTC+01",
+    "it": "UTC+01",
+    "pt-BR": "UTC-03",
+    "ru": "UTC+03",
+    "nl": "UTC+01",
+    "pl": "UTC+01",
+    "tr": "UTC+03",
+    "da": "UTC+01",
+    "fi": "UTC+02",
+    "nb-NO": "UTC+01",
+    "sv-SE": "UTC+01",
+    "cs": "UTC+01",
+    "hu": "UTC+01",
+    "ro": "UTC+02",
+    "uk": "UTC+02",
+    "bg": "UTC+02",
+    "el": "UTC+02",
+    "th": "UTC+07",
+    "vi": "UTC+07",
+    "id": "UTC+07",
+    "ms": "UTC+08",
+    "hi": "UTC+05:30",
+    "en-GB": "UTC+00",
+    "pt-PT": "UTC+00",
     "en-AU": "UTC+10",
-    "en-CA": "UTC-5",
-    "es-MX": "UTC-6",
-    "fr-CA": "UTC-5",
-    "es-AR": "UTC-3",
-    "es-CL": "UTC-3",
-    "es-CO": "UTC-5",
-    "en-US": "UTC-5",
+    "en-CA": "UTC-05",
+    "es-MX": "UTC-06",
+    "fr-CA": "UTC-05",
+    "es-AR": "UTC-03",
+    "es-CL": "UTC-03",
+    "es-CO": "UTC-05",
+    "en-US": "UTC-05",
 }
 
 
@@ -69,14 +69,14 @@ def parse_offset(offset_str: str) -> timedelta | None:
 
 
 def format_offset(offset: timedelta) -> str:
-    """Format timedelta → ``'UTC+5'`` or ``'UTC+5:30'``."""
+    """Format timedelta → ``'UTC+05'`` or ``'UTC+05:30'``."""
     total_minutes = int(offset.total_seconds() / 60)
     sign = "+" if total_minutes >= 0 else "-"
     hours = abs(total_minutes) // 60
     minutes = abs(total_minutes) % 60
     if minutes == 0:
-        return f"UTC{sign}{hours}"
-    return f"UTC{sign}{hours}:{minutes:02d}"
+        return f"UTC{sign}{hours:02d}"
+    return f"UTC{sign}{hours:02d}:{minutes:02d}"
 
 
 def locale_to_offset_str(locale_value: str) -> str | None:

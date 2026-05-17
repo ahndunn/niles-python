@@ -54,6 +54,9 @@ async def timezone_view(interaction: Interaction) -> None:
             ephemeral=True,
         )
         return
+    parsed = parse_offset(offset_str)
+    if parsed is not None:
+        offset_str = format_offset(parsed)
     await interaction.response.send_message(
         f"Your timezone: {offset_str}", ephemeral=True
     )
