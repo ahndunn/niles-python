@@ -24,7 +24,7 @@ from niles.discord.views.base import NilesView
 from niles.utils.loggers import LOGGER
 
 if TYPE_CHECKING:
-    from niles.discord.stores import ScheduleStore
+    from niles.discord.databases.schedule import ScheduleStore
 
 
 def _first_val(interaction: Interaction) -> str | None:

@@ -4,6 +4,7 @@ import contextlib
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
+from typing import TYPE_CHECKING
 from typing import Any
 from typing import Literal
 from typing import cast
@@ -13,14 +14,16 @@ from discord import Interaction
 from discord.ui import Button
 from discord.ui import Select
 
+from niles.discord.databases.schedule import ScheduleStore
 from niles.discord.models import EventData
 from niles.discord.models import PendingConfirmation
-from niles.discord.stores import EventStore
-from niles.discord.stores import PendingConfirmationStore
-from niles.discord.stores import ScheduleStore
 from niles.discord.stores import get_event_store
 from niles.discord.views.base import NilesView
 from niles.utils.loggers import LOGGER
+
+if TYPE_CHECKING:
+    from niles.discord.databases.event import EventStore
+    from niles.discord.databases.pending import PendingConfirmationStore
 
 _TIMEOUT_MINUTES = 60
 

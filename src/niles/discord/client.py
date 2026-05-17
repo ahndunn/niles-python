@@ -8,13 +8,13 @@ from discord import Interaction
 from discord.ext import commands
 
 from niles.discord.commands import setup_commands
+from niles.discord.databases.event import EventStore
+from niles.discord.databases.pending import PendingConfirmationStore
+from niles.discord.databases.schedule import ScheduleStore
+from niles.discord.databases.timezone import TimezoneStore
 from niles.discord.hooks.on_disconnect import on_disconnect as _on_disconnect
 from niles.discord.hooks.on_message import on_message as _on_message
 from niles.discord.hooks.on_ready import on_ready as _on_ready
-from niles.discord.stores import EventStore
-from niles.discord.stores import PendingConfirmationStore
-from niles.discord.stores import ScheduleStore
-from niles.discord.stores import TimezoneStore
 from niles.utils.loggers import LOGGER
 
 if TYPE_CHECKING:
