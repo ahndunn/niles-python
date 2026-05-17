@@ -64,6 +64,31 @@ def _fmt_short(w: TimeWindow, offset: timedelta = timedelta(0)) -> str:
     return f"{local_start.strftime('%H:%M')}-{local_end.strftime('%H:%M')}"
 
 
+def _chunk[T](items: list[T], size: int) -> list[list[T]]:
+    """Split a list into chunks of the given size."""
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+def _build_config_summary(ctx: _ScheduleEditContext) -> str:
+    """Build a summary of all configured dates/times."""
+    if not ctx.configs:
+        return "**Your Free Time Selections:**\n*None yet*"
+    lines = ["**Your Free Time Selections:**"]
+    for i, d in enumerate(ctx.dates):
+        windows = ctx.configs.get(i)
+        if windows:
+            windows_str = ", ".join(f"{st}-{et}" for st, et in windows)
+            lines.append(f"📅 {d.strftime('%a %Y-%m-%d')}: {windows_str}")
+    return "\n".join(lines)
+
+
+def _fmt_windows(windows: list[tuple[str, str]]) -> str:
+    """Format a list of time windows as a string."""
+    if not windows:
+        return "None"
+    return ", ".join(f"{st}-{et}" for st, et in windows)
+
+
 @dataclass(frozen=True, slots=True)
 class _DateRangeState:
     """Accumulated state for date range selection wizard."""
@@ -347,7 +372,7 @@ class _ScheduleDatePickView(NilesView):
                 dates.append(current)
                 current += timedelta(days=1)
 
-            configs: dict[int, tuple[str, str]] = {}
+            configs: dict[int, list[tuple[str, str]]] = {}
             ctx = _ScheduleEditContext(
                 store=self._store,
                 user_id=self._user_id,
@@ -379,82 +404,149 @@ class _ScheduleEditContext:
     user_id: int
     offset: timedelta
     dates: list[date]
-    configs: dict[int, tuple[str, str]]
+    configs: dict[int, list[tuple[str, str]]]
 
 
 class ScheduleDateConfigView(NilesView):
-    """Interactive view for per-date time configuration."""
+    """Interactive view for per-date time configuration with buttons."""
 
     def __init__(self, ctx: _ScheduleEditContext) -> None:
         """Init."""
         super().__init__(timeout=300)
         self._ctx = ctx
 
+        configured = sorted(
+            [
+                (i, d, ctx.configs[i])
+                for i, d in enumerate(ctx.dates)
+                if i in ctx.configs
+            ],
+            key=lambda x: x[0],
+        )
+        unconfigured = [
+            (i, d) for i, d in enumerate(ctx.dates) if i not in ctx.configs
+        ]
+
+        for edit_row, batch in enumerate(_chunk(configured, 5)):
+            for i, d, _windows in batch:
+                btn: Button[Any] = Button(
+                    label=f"Edit {d.strftime('%m/%d')}",
+                    style=discord.ButtonStyle.primary,
+                    row=edit_row,
+                )
+                btn.callback = self._make_edit_callback(i)
+                self.add_item(btn)
+
+        pick_row = 2
+        for batch in _chunk(unconfigured, 5):
+            for i, d in batch:
+                btn: Button[Any] = Button(
+                    label=d.strftime("%a %m/%d"),
+                    style=discord.ButtonStyle.secondary,
+                    row=pick_row,
+                )
+                btn.callback = self._make_date_callback(i)
+                self.add_item(btn)
+            pick_row += 1
+
+        act_row = 4
+        if unconfigured:
+            iter_btn: Button[Any] = Button(
+                label="Configure All Iteratively",
+                style=discord.ButtonStyle.secondary,
+                row=act_row,
+            )
+            iter_btn.callback = self._on_iterative
+            self.add_item(iter_btn)
+        if configured:
+            confirm_btn: Button[Any] = Button(
+                label="Confirm & Save",
+                style=discord.ButtonStyle.success,
+                row=act_row,
+            )
+            confirm_btn.callback = self._on_confirm
+            self.add_item(confirm_btn)
+
+    def _make_date_callback(self, idx: int):  # noqa: ANN202
+        async def callback(interaction: Interaction) -> None:
+            date_ = self._ctx.dates[idx]
+            nv = ScheduleTimeFlowView(self._ctx, idx, date_, step=0)
+            await interaction.response.edit_message(
+                content=(
+                    f"{_build_config_summary(self._ctx)}\n\n"
+                    f"Configuring **{date_.strftime('%a %Y-%m-%d')}**."
+                    f" Choose start hour:"
+                ),
+                view=nv,
+            )
+
+        return callback
+
+    def _make_edit_callback(self, idx: int):  # noqa: ANN202
+        async def callback(interaction: Interaction) -> None:
+            date_ = self._ctx.dates[idx]
+            nv = ScheduleTimeFlowView(self._ctx, idx, date_, step=0)
+            await interaction.response.edit_message(
+                content=(
+                    f"{_build_config_summary(self._ctx)}\n\n"
+                    f"Editing **{date_.strftime('%a %Y-%m-%d')}**. "
+                    f"Choose start hour:"
+                ),
+                view=nv,
+            )
+
+        return callback
+
+    async def _on_iterative(self, interaction: Interaction) -> None:
+        """Start iterative configuration across all unconfigured dates."""
         unconfigured = [
             (i, d)
             for i, d in enumerate(self._ctx.dates)
             if i not in self._ctx.configs
         ]
-        if unconfigured:
-            options = [
-                discord.SelectOption(
-                    label=d.strftime("%a %Y-%m-%d"), value=str(i)
-                )
-                for i, d in unconfigured[:25]
-            ]
-            sel: Select[Any] = Select(
-                options=options,
-                placeholder="Pick a date to configure...",
-                row=0,
-            )
-            sel.callback = self._on_select_date
-            self.add_item(sel)
-
-        if self._ctx.configs:
-            confirm: Button[Any] = Button(
-                label="Confirm & Save", style=discord.ButtonStyle.success, row=1
-            )
-            confirm.callback = self._on_confirm
-            self.add_item(confirm)
-
-    async def _on_select_date(self, interaction: Interaction) -> None:
-        """Open a time select view for the selected date."""
-        for child in self.children:
-            if isinstance(child, Select) and child.values:
-                idx = int(child.values[0])
-                break
-        else:
+        if not unconfigured:
+            await interaction.response.defer()
             return
-        date_ = self._ctx.dates[idx]
+        first_idx, first_date = unconfigured[0]
+        remaining = unconfigured[1:]
+        nv = ScheduleTimeFlowView(
+            self._ctx,
+            first_idx,
+            first_date,
+            step=0,
+            next_unconfigured=remaining,
+        )
         await interaction.response.edit_message(
             content=(
-                f"Set time for **{date_.strftime('%a %Y-%m-%d')}**."
-                f" Choose start hour:"
+                f"**Iterative mode** — configuring"
+                f" **{first_date.strftime('%a %Y-%m-%d')}**.\n"
+                f"Choose start hour:"
             ),
-            view=ScheduleTimeFlowView(self._ctx, idx, date_, step=0),
+            view=nv,
         )
 
     async def _on_confirm(self, interaction: Interaction) -> None:
         """Generate windows from per-date configs and show preview."""
         windows: list[TimeWindow] = []
         user_tz = timezone(self._ctx.offset)
-        for idx, (st, et) in self._ctx.configs.items():
+        for idx, windows_list in self._ctx.configs.items():
             d = self._ctx.dates[idx]
-            try:
-                sh, smi = (int(x) for x in st.split(":"))
-                eh, emi = (int(x) for x in et.split(":"))
-            except ValueError:
-                continue
-            win_start = datetime(
-                d.year, d.month, d.day, sh, smi, tzinfo=user_tz
-            ).astimezone(UTC)
-            win_end = datetime(
-                d.year, d.month, d.day, eh, emi, tzinfo=user_tz
-            ).astimezone(UTC)
-            while win_start + timedelta(minutes=15) <= win_end:
-                w_end = win_start + timedelta(minutes=15)
-                windows.append(TimeWindow(start=win_start, end=w_end))
-                win_start = w_end
+            for st, et in windows_list:
+                try:
+                    sh, smi = (int(x) for x in st.split(":"))
+                    eh, emi = (int(x) for x in et.split(":"))
+                except ValueError:
+                    continue
+                win_start = datetime(
+                    d.year, d.month, d.day, sh, smi, tzinfo=user_tz
+                ).astimezone(UTC)
+                win_end = datetime(
+                    d.year, d.month, d.day, eh, emi, tzinfo=user_tz
+                ).astimezone(UTC)
+                while win_start + timedelta(minutes=15) <= win_end:
+                    w_end = win_start + timedelta(minutes=15)
+                    windows.append(TimeWindow(start=win_start, end=w_end))
+                    win_start = w_end
 
         if not windows:
             await interaction.response.send_message(
@@ -655,15 +747,11 @@ class ScheduleTimeSelectView(NilesView):
             )
             return
 
-        new_configs = {**self._ctx.configs, self._date_idx: (st, et)}
+        new_configs = {**self._ctx.configs, self._date_idx: [(st, et)]}
         new_ctx = replace(self._ctx, configs=new_configs)
         new_view = ScheduleDateConfigView(new_ctx)
         await interaction.response.edit_message(
-            content=(
-                f"Time set for **{self._date.strftime('%a %Y-%m-%d')}**:"
-                f" {st} - {et}"
-            ),
-            view=new_view,
+            content=_build_config_summary(new_ctx), view=new_view
         )
 
 
@@ -680,6 +768,7 @@ class ScheduleTimeFlowView(NilesView):
         start_m: int | None = None,
         end_h: int | None = None,
         end_m: int | None = None,
+        next_unconfigured: list[tuple[int, date]] | None = None,
     ) -> None:
         """Init."""
         super().__init__(timeout=300)
@@ -691,6 +780,7 @@ class ScheduleTimeFlowView(NilesView):
         self._start_m = start_m
         self._end_h = end_h
         self._end_m = end_m
+        self._next_unconfigured = next_unconfigured
 
         if step == 0:
             self._build_start_hour_buttons()
@@ -700,9 +790,13 @@ class ScheduleTimeFlowView(NilesView):
             self._build_end_hour_buttons()
         elif step == 3:  # noqa: PLR2004
             self._build_minute_buttons(is_start=False)
+        elif step == 4:  # noqa: PLR2004
+            self._build_post_time_buttons()
 
         if 0 < step < 4:  # noqa: PLR2004
             self._add_back_button()
+        if step == 4:  # noqa: PLR2004
+            self._add_back_button(row=1)
         self._add_cancel_button()
 
     @staticmethod
@@ -739,16 +833,23 @@ class ScheduleTimeFlowView(NilesView):
             return (count - 1) // 5
         return 0
 
-    def _add_back_button(self) -> None:
-        last_row = self._last_content_row()
-        if last_row < 4:  # noqa: PLR2004
+    def _add_back_button(self, row: int | None = None) -> None:
+        if row is not None:
             back = Button[Any](
-                label="Back",
-                style=discord.ButtonStyle.secondary,
-                row=last_row + 1,
+                label="Back", style=discord.ButtonStyle.secondary, row=row
             )
             back.callback = self._on_back
             self.add_item(back)
+        else:
+            last_row = self._last_content_row()
+            if last_row < 4:  # noqa: PLR2004
+                back = Button[Any](
+                    label="Back",
+                    style=discord.ButtonStyle.secondary,
+                    row=last_row + 1,
+                )
+                back.callback = self._on_back
+                self.add_item(back)
 
     def _add_cancel_button(self) -> None:
         cancel = Button[Any](
@@ -756,6 +857,20 @@ class ScheduleTimeFlowView(NilesView):
         )
         cancel.callback = self._on_cancel
         self.add_item(cancel)
+
+    def _build_post_time_buttons(self) -> None:
+        add_btn: Button[Any] = Button(
+            label="Add Another Window", style=discord.ButtonStyle.primary, row=0
+        )
+        add_btn.callback = self._on_add_another
+        self.add_item(add_btn)
+
+        done_label = "Next Day →" if self._next_unconfigured else "Done"
+        done_btn: Button[Any] = Button(
+            label=done_label, style=discord.ButtonStyle.secondary, row=0
+        )
+        done_btn.callback = self._on_done
+        self.add_item(done_btn)
 
     def _build_start_hour_buttons(self) -> None:
         for h24 in range(24):
@@ -771,7 +886,12 @@ class ScheduleTimeFlowView(NilesView):
         async def callback(interaction: Interaction) -> None:
             if is_start:
                 nv = ScheduleTimeFlowView(
-                    self._ctx, self._date_idx, self._date, step=1, start_h=h24
+                    self._ctx,
+                    self._date_idx,
+                    self._date,
+                    step=1,
+                    start_h=h24,
+                    next_unconfigured=self._next_unconfigured,
                 )
                 content = (
                     f"Start hour: **{self._fmt_hour(h24)}**. "
@@ -786,6 +906,7 @@ class ScheduleTimeFlowView(NilesView):
                     start_h=self._start_h,
                     start_m=self._start_m,
                     end_h=h24,
+                    next_unconfigured=self._next_unconfigured,
                 )
                 content = (
                     f"End hour: **{self._fmt_hour(h24)}**. Choose end minute:"
@@ -823,6 +944,7 @@ class ScheduleTimeFlowView(NilesView):
                     step=2,
                     start_h=self._start_h,
                     start_m=m,
+                    next_unconfigured=self._next_unconfigured,
                 )
                 content = (
                     f"Start time: "
@@ -840,16 +962,70 @@ class ScheduleTimeFlowView(NilesView):
     async def _on_end_minute(self, interaction: Interaction, m: int) -> None:
         st = f"{self._start_h:02d}:{self._start_m:02d}"
         et = f"{self._end_h:02d}:{m:02d}"
-        new_configs = {**self._ctx.configs, self._date_idx: (st, et)}
+        existing = self._ctx.configs.get(self._date_idx, [])
+        new_configs = {
+            **self._ctx.configs,
+            self._date_idx: [*existing, (st, et)],
+        }
         new_ctx = replace(self._ctx, configs=new_configs)
-        new_view = ScheduleDateConfigView(new_ctx)
+        nv = ScheduleTimeFlowView(
+            new_ctx,
+            self._date_idx,
+            self._date,
+            step=4,
+            next_unconfigured=self._next_unconfigured,
+        )
+        windows_str = _fmt_windows(new_ctx.configs[self._date_idx])
+        content = (
+            f"Saved window **{st} - {et}**"
+            f" for **{self._date.strftime('%a %Y-%m-%d')}**.\n"
+            f"Current windows: {windows_str}\n"
+            f"What next?"
+        )
+        await interaction.response.edit_message(content=content, view=nv)
+
+    async def _on_add_another(self, interaction: Interaction) -> None:
+        nv = ScheduleTimeFlowView(
+            self._ctx,
+            self._date_idx,
+            self._date,
+            step=0,
+            next_unconfigured=self._next_unconfigured,
+        )
         await interaction.response.edit_message(
             content=(
-                f"Time set for **{self._date.strftime('%a %Y-%m-%d')}**:"
-                f" {st} - {et}"
+                f"{_build_config_summary(self._ctx)}\n\n"
+                f"Adding another window for"
+                f" **{self._date.strftime('%a %Y-%m-%d')}**.\n"
+                f"Choose start hour:"
             ),
-            view=new_view,
+            view=nv,
         )
+
+    async def _on_done(self, interaction: Interaction) -> None:
+        if self._next_unconfigured:
+            next_idx, next_date = self._next_unconfigured[0]
+            remaining = self._next_unconfigured[1:]
+            nv = ScheduleTimeFlowView(
+                self._ctx,
+                next_idx,
+                next_date,
+                step=0,
+                next_unconfigured=remaining,
+            )
+            await interaction.response.edit_message(
+                content=(
+                    f"**Iterative mode** — configuring"
+                    f" **{next_date.strftime('%a %Y-%m-%d')}**.\n"
+                    f"Choose start hour:"
+                ),
+                view=nv,
+            )
+        else:
+            nv = ScheduleDateConfigView(self._ctx)
+            await interaction.response.edit_message(
+                content=_build_config_summary(self._ctx), view=nv
+            )
 
     def _build_end_hour_buttons(self) -> None:
         min_h24 = cast("int", self._start_h) + (
@@ -878,7 +1054,11 @@ class ScheduleTimeFlowView(NilesView):
     async def _on_back(self, interaction: Interaction) -> None:
         if self._step == 1:
             nv = ScheduleTimeFlowView(
-                self._ctx, self._date_idx, self._date, step=0
+                self._ctx,
+                self._date_idx,
+                self._date,
+                step=0,
+                next_unconfigured=self._next_unconfigured,
             )
             content = "Choose start hour:"
         elif self._step == 2:  # noqa: PLR2004
@@ -888,6 +1068,7 @@ class ScheduleTimeFlowView(NilesView):
                 self._date,
                 step=1,
                 start_h=self._start_h,
+                next_unconfigured=self._next_unconfigured,
             )
             content = (
                 f"Start hour: "
@@ -902,23 +1083,28 @@ class ScheduleTimeFlowView(NilesView):
                 step=2,
                 start_h=self._start_h,
                 start_m=self._start_m,
+                next_unconfigured=self._next_unconfigured,
             )
             sh = cast("int", self._start_h)
             sm = cast("int", self._start_m)
             content = (
                 f"Start time: **{self._fmt_time(sh, sm)}**. Choose end hour:"
             )
+        elif self._step == 4:  # noqa: PLR2004
+            nv = ScheduleDateConfigView(self._ctx)
+            await interaction.response.edit_message(
+                content=_build_config_summary(self._ctx), view=nv
+            )
+            return
         else:
             return
         await interaction.response.edit_message(content=content, view=nv)
 
     async def _on_cancel(self, interaction: Interaction) -> None:
-        new_view = ScheduleDateConfigView(self._ctx)
-        content = (
-            "Set time for each date by selecting it below, "
-            "then click **Confirm & Save** when done:"
+        nv = ScheduleDateConfigView(self._ctx)
+        await interaction.response.edit_message(
+            content=_build_config_summary(self._ctx), view=nv
         )
-        await interaction.response.edit_message(content=content, view=new_view)
 
 
 class ConfirmWindowsView(NilesView):
