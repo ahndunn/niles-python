@@ -100,15 +100,31 @@ class _DateRangeState:
     em: int = 0
 
 
+def _merge_time_ranges(ranges: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Merge consecutive or overlapping time ranges into larger ones."""
+    if not ranges:
+        return []
+    sorted_ranges = sorted(ranges, key=lambda r: r[0])
+    merged = [sorted_ranges[0]]
+    for r in sorted_ranges[1:]:
+        if r[0] <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], r[1]))
+        else:
+            merged.append(r)
+    return merged
+
+
 def _merge_windows(windows: list[TimeWindow]) -> list[TimeWindow]:
-    """Merge consecutive time windows into larger ranges."""
+    """Merge consecutive or overlapping time windows into larger ranges."""
     if not windows:
         return []
     sorted_windows = sorted(windows, key=lambda w: w.start)
     merged = [sorted_windows[0]]
     for w in sorted_windows[1:]:
-        if w.start == merged[-1].end:
-            merged[-1] = TimeWindow(start=merged[-1].start, end=w.end)
+        if w.start <= merged[-1].end:
+            merged[-1] = TimeWindow(
+                start=merged[-1].start, end=max(merged[-1].end, w.end)
+            )
         else:
             merged.append(w)
     return merged
@@ -963,10 +979,8 @@ class ScheduleTimeFlowView(NilesView):
         st = f"{self._start_h:02d}:{self._start_m:02d}"
         et = f"{self._end_h:02d}:{m:02d}"
         existing = self._ctx.configs.get(self._date_idx, [])
-        new_configs = {
-            **self._ctx.configs,
-            self._date_idx: [*existing, (st, et)],
-        }
+        merged = _merge_time_ranges([*existing, (st, et)])
+        new_configs = {**self._ctx.configs, self._date_idx: merged}
         new_ctx = replace(self._ctx, configs=new_configs)
         nv = ScheduleTimeFlowView(
             new_ctx,
