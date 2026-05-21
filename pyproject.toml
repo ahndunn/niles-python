@@ -13,6 +13,12 @@ dependencies = [
 [project.scripts]
 niles = "niles:main"
 
+[dependency-groups]
+dev = [
+  "pyright[nodejs]>=1.1.409",
+  "ruff>=0.15.13",
+]
+
 [build-system]
 requires = ["uv_build>=0.11.13,<0.12.0"]
 build-backend = "uv_build"
