@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 @final
 class _LoggerSettings(BaseSettings):
     LEVEL: Literal["DEBUG", "WARNING", "INFO"] = Field(init=False)
+    DIR: Path = Field(default_factory=lambda: Path.cwd().joinpath("logs"))
 
     model_config = {"case_sensitive": True, "env_prefix": "LOG_"}
 
@@ -38,7 +39,7 @@ _logger.add(
     backtrace=True,
 )
 _logger.add(
-    Path.cwd().joinpath("logs", "{time:YYYY_MM_DD!UTC}"),
+    _LOGGER_SETTINGS.DIR.joinpath("{time:YYYY_MM_DD!UTC}.log"),
     level=_LOGGER_SETTINGS.LEVEL,
     enqueue=True,
     colorize=True,
